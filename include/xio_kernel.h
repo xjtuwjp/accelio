@@ -91,7 +91,7 @@ enum xio_optlevel {
 enum xio_optname {
 	XIO_OPTNAME_ENABLE_MEM_POOL,	    /**< enables the internal rdma  */
 					    /**< memory pool		    */
-
+	XIO_OPTNAME_DISABLE_HUGETBL,      /**< disable huge pages allocations */
 	XIO_OPTNAME_LOG_FN,		   /**< set user log function	   */
 	XIO_OPTNAME_LOG_LEVEL,		   /**< set/get logging level      */
 	XIO_OPTNAME_ENABLE_DMA_LATENCY,    /**< enables the dma latency    */
@@ -208,6 +208,16 @@ struct xio_session_attr {
 	void			*user_context;  /* sent to server upon new
 						   session */
 	size_t			user_context_len;
+};
+
+/**
+ * @struct xio_context_params
+ * @brief context parameters structure
+ */
+struct xio_context_params {
+        void                    *user_context;  /**< private user context to */
+                                                /**< pass to connection      */
+                                                /**< oriented callbacks      */
 };
 
 struct xio_buf {
