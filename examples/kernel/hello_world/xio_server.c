@@ -84,7 +84,7 @@ static int on_session_event(struct xio_session *session,
 	       xio_session_event_str(event_data->event),
 	       xio_strerror(event_data->reason));
 
-	xio_session_close(session);
+	xio_session_destroy(session);
 	/* exit */
 	xio_ev_loop_stop(server_data->ctx);
 
@@ -156,7 +156,7 @@ static int xio_server_main(void *data)
 	}
 
 	/* create thread context for the server */
-	ctx = xio_ctx_open(XIO_LOOP_GIVEN_THREAD, NULL, current, 0, -1);
+	ctx = xio_ctx_create(XIO_LOOP_GIVEN_THREAD, NULL, current, 0, -1);
 	if (!ctx) {
 		kfree(server_data);
 		printk("context open filed\n");
@@ -192,7 +192,7 @@ static int xio_server_main(void *data)
 		kfree(server_data->rsp[i].out.header.iov_base);
 
 	/* free the context */
-	xio_ctx_close(ctx);
+	xio_ctx_destroy(ctx);
 
 	kfree(server_data);
 

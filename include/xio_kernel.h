@@ -485,7 +485,7 @@ const char *xio_session_event_str(enum xio_session_event event);
 #define XIO_LOOP_WORKQUEUE	3
 
 /*---------------------------------------------------------------------------*/
-/* xio_ctx_open                                                           */
+/* xio_ctx_create                                                           */
 /*---------------------------------------------------------------------------*/
 /**
  * xio_context - creates xio context - a context is mapped internaly to
@@ -499,7 +499,7 @@ const char *xio_session_event_str(enum xio_session_event event);
  *
  * RETURNS: xio context handle, or NULL upon error.
  */
-struct xio_context *xio_ctx_open(unsigned int flags,
+struct xio_context *xio_ctx_create(unsigned int flags,
 				 struct xio_loop_ops *loop_ops,
 				 struct task_struct *worker,
 				 int polling_timeout,
@@ -511,13 +511,13 @@ struct xio_context *xio_ctx_open(unsigned int flags,
  * @ctx: Pointer to the xio context handle.
  *
  */
-void xio_ctx_close(struct xio_context *ctx);
+void xio_ctx_destroy(struct xio_context *ctx);
 
 /*---------------------------------------------------------------------------*/
 /* XIO session API                                                           */
 /*---------------------------------------------------------------------------*/
 /**
- * xio_session_open - open new session.
+ * xio_session_create - open new session.
  *
  * @type: the type of the session.
  * @attr: structure of session attributes
@@ -528,7 +528,7 @@ void xio_ctx_close(struct xio_context *ctx);
  *
  * RETURNS: xio session context, or NULL upon error.
  */
-struct xio_session *xio_session_open(
+struct xio_session *xio_session_create(
 		enum xio_session_type type,
 		struct xio_session_attr *attr,
 		const char *uri,
@@ -537,13 +537,13 @@ struct xio_session *xio_session_open(
 		void *cb_user_context);
 
 /**
- * xio_session_close - teardown an opened session.
+ * xio_session_destroy - teardown an opened session.
  *
  * @session: The xio session handle.
  *
  * RETURNS: success (0), or a (negative) error value.
  */
-int xio_session_close(struct xio_session *session);
+int xio_session_destroy(struct xio_session *session);
 
 /**
  * xio_connect - create connection handle.

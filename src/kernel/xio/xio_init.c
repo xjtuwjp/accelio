@@ -70,8 +70,8 @@ static void __exit xio_cleanup_module(void)
 module_init(xio_init_module);
 module_exit(xio_cleanup_module);
 
-EXPORT_SYMBOL(xio_ctx_open);
-EXPORT_SYMBOL(xio_ctx_close);
+EXPORT_SYMBOL(xio_ctx_create);
+EXPORT_SYMBOL(xio_ctx_destroy);
 
 EXPORT_SYMBOL(xio_context_reg_observer);
 EXPORT_SYMBOL(xio_context_unreg_observer);
@@ -98,8 +98,8 @@ EXPORT_SYMBOL(xio_ev_loop_stop);
 EXPORT_SYMBOL(xio_ev_loop_run);
 
 EXPORT_SYMBOL(xio_uri_to_ss);
-EXPORT_SYMBOL(xio_session_open);
-EXPORT_SYMBOL(xio_session_close);
+EXPORT_SYMBOL(xio_session_create);
+EXPORT_SYMBOL(xio_session_destroy);
 EXPORT_SYMBOL(xio_session_event_str);
 
 EXPORT_SYMBOL(xio_bind);
