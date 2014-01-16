@@ -5,6 +5,7 @@
 *.a
 *.log
 .deps
+ltmain.sh
 Makefile
 configure
 autom4te.cache

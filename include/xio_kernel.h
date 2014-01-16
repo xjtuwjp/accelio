@@ -115,25 +115,25 @@ enum xio_status {
 	XIO_E_PARTIAL_MSG		= (XIO_BASE_STATUS + 7),
 	XIO_E_MSG_INVALID		= (XIO_BASE_STATUS + 8),
 	XIO_E_MSG_UNKNOWN		= (XIO_BASE_STATUS + 9),
-        XIO_E_SESSION_REFUSED           = (XIO_BASE_STATUS + 10),
+	XIO_E_SESSION_REFUSED           = (XIO_BASE_STATUS + 10),
 	XIO_E_SESSION_ABORTED           = (XIO_BASE_STATUS + 11),
-        XIO_E_SESSION_DISCONECTED       = (XIO_BASE_STATUS + 12),
-        XIO_E_SESSION_REJECTED          = (XIO_BASE_STATUS + 13),
-        XIO_E_SESSION_REDIRECTED        = (XIO_BASE_STATUS + 14),
-        XIO_E_BIND_FAILED               = (XIO_BASE_STATUS + 15),
-        XIO_E_TIMEOUT                   = (XIO_BASE_STATUS + 16),
-        XIO_E_IN_PORGRESS               = (XIO_BASE_STATUS + 17),
-        XIO_E_INVALID_VERSION           = (XIO_BASE_STATUS + 18),
-        XIO_E_NOT_SESSION               = (XIO_BASE_STATUS + 19),
-        XIO_E_OPEN_FAILED               = (XIO_BASE_STATUS + 20),
-        XIO_E_READ_FAILED               = (XIO_BASE_STATUS + 21),
-        XIO_E_WRITE_FAILED              = (XIO_BASE_STATUS + 22),
-        XIO_E_CLOSE_FAILED              = (XIO_BASE_STATUS + 23),
-        XIO_E_UNSUCCESSFUL              = (XIO_BASE_STATUS + 24),
-        XIO_E_MSG_CANCELED              = (XIO_BASE_STATUS + 25),
-        XIO_E_MSG_CANCEL_FAILED         = (XIO_BASE_STATUS + 26),
-        XIO_E_MSG_NOT_FOUND             = (XIO_BASE_STATUS + 27),
-        XIO_E_MSG_FLUSHED               = (XIO_BASE_STATUS + 28)
+	XIO_E_SESSION_DISCONECTED       = (XIO_BASE_STATUS + 12),
+	XIO_E_SESSION_REJECTED          = (XIO_BASE_STATUS + 13),
+	XIO_E_SESSION_REDIRECTED        = (XIO_BASE_STATUS + 14),
+	XIO_E_BIND_FAILED               = (XIO_BASE_STATUS + 15),
+	XIO_E_TIMEOUT                   = (XIO_BASE_STATUS + 16),
+	XIO_E_IN_PORGRESS               = (XIO_BASE_STATUS + 17),
+	XIO_E_INVALID_VERSION           = (XIO_BASE_STATUS + 18),
+	XIO_E_NOT_SESSION               = (XIO_BASE_STATUS + 19),
+	XIO_E_OPEN_FAILED               = (XIO_BASE_STATUS + 20),
+	XIO_E_READ_FAILED               = (XIO_BASE_STATUS + 21),
+	XIO_E_WRITE_FAILED              = (XIO_BASE_STATUS + 22),
+	XIO_E_CLOSE_FAILED              = (XIO_BASE_STATUS + 23),
+	XIO_E_UNSUCCESSFUL              = (XIO_BASE_STATUS + 24),
+	XIO_E_MSG_CANCELED              = (XIO_BASE_STATUS + 25),
+	XIO_E_MSG_CANCEL_FAILED         = (XIO_BASE_STATUS + 26),
+	XIO_E_MSG_NOT_FOUND             = (XIO_BASE_STATUS + 27),
+	XIO_E_MSG_FLUSHED               = (XIO_BASE_STATUS + 28)
 };
 
 enum xo_ev_loop_events {
@@ -225,8 +225,6 @@ struct xio_connection_params {
                                                 /**< oriented callbacks      */
 };
 
-
-
 /**
  * @struct xio_context_params
  * @brief context parameters structure
@@ -259,30 +257,7 @@ struct xio_vmsg {
 	size_t			data_iovlen;	/* number of items in vector  */
 	struct xio_iovec_ex	data_iov[XIO_MAX_IOV];
 };
-#if 0
-struct xio_msg {
-	struct xio_vmsg		in;
-	struct xio_vmsg		out;
-	union {
-		uint64_t		sn;	/* unique message serial number
-						 * returned by the library
-						 */
-		struct xio_msg		*request;  /* on server side - attached
-						    * request
-						    */
-	};
-	enum xio_msg_type	type;
-	int		        more_in_batch;	/* more messages are expected */
-	int			status;
-	int			flags;
-	enum xio_receipt_result	receipt_res;
-	uint64_t		timestamp;	/**< submission timestamp     */
-	int			reserved;
-	void			*user_context;	/* for user usage - not sent */
-	struct xio_msg		*next;          /* internal use */
-	struct xio_msg		**prev;		/* internal use */
-};
-#endif
+
 /**
  * @struct xio_msg_pdata
  * @brief message private data structure used internaly by the library
@@ -291,8 +266,6 @@ struct xio_msg_pdata {
         struct xio_msg          *next;          /**< internal library usage   */
         struct xio_msg          **prev;         /**< internal library usage   */
 };
-
-
 
 /**
  * @struct xio_msg
@@ -327,7 +300,6 @@ struct xio_msg {
         struct xio_msg_pdata    pdata;          /**< accelio private data     */
         struct xio_msg          *next;          /**< send list of messages    */
 };
-
 
 /**
  * @struct xio_session_event_data
