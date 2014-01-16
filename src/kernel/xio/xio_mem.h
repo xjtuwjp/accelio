@@ -40,6 +40,8 @@
 
 void *malloc_huge_pages(size_t size);
 void free_huge_pages(void *ptr);
-
+static inline void xio_disable_huge_pages(int disable)
+{
+}
 
 #endif

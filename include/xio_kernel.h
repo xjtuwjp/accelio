@@ -115,25 +115,28 @@ enum xio_status {
 	XIO_E_PARTIAL_MSG		= (XIO_BASE_STATUS + 7),
 	XIO_E_MSG_INVALID		= (XIO_BASE_STATUS + 8),
 	XIO_E_MSG_UNKNOWN		= (XIO_BASE_STATUS + 9),
-	XIO_E_SESSION_REFUSED		= (XIO_BASE_STATUS + 10),
-	XIO_E_SESSION_ABORTED		= (XIO_BASE_STATUS + 11),
-	XIO_E_SESSION_DISCONECTED	= (XIO_BASE_STATUS + 12),
-	XIO_E_BIND_FAILED		= (XIO_BASE_STATUS + 13),
-	XIO_E_TIMEOUT			= (XIO_BASE_STATUS + 14),
-	XIO_E_IN_PORGRESS		= (XIO_BASE_STATUS + 15),
-	XIO_E_INVALID_VERSION		= (XIO_BASE_STATUS + 16),
-	XIO_E_NOT_SESSION		= (XIO_BASE_STATUS + 17),
-	XIO_E_OPEN_FAILED		= (XIO_BASE_STATUS + 18),
-	XIO_E_READ_FAILED		= (XIO_BASE_STATUS + 19),
-	XIO_E_WRITE_FAILED		= (XIO_BASE_STATUS + 20),
-	XIO_E_CLOSE_FAILED		= (XIO_BASE_STATUS + 21),
-	XIO_E_UNSUCCESSFUL		= (XIO_BASE_STATUS + 22),
-	XIO_E_MSG_CANCELED		= (XIO_BASE_STATUS + 23),
-	XIO_E_MSG_CANCEL_FAILED		= (XIO_BASE_STATUS + 24),
-	XIO_E_MSG_NOT_FOUND		= (XIO_BASE_STATUS + 25),
+        XIO_E_SESSION_REFUSED           = (XIO_BASE_STATUS + 10),
+	XIO_E_SESSION_ABORTED           = (XIO_BASE_STATUS + 11),
+        XIO_E_SESSION_DISCONECTED       = (XIO_BASE_STATUS + 12),
+        XIO_E_SESSION_REJECTED          = (XIO_BASE_STATUS + 13),
+        XIO_E_SESSION_REDIRECTED        = (XIO_BASE_STATUS + 14),
+        XIO_E_BIND_FAILED               = (XIO_BASE_STATUS + 15),
+        XIO_E_TIMEOUT                   = (XIO_BASE_STATUS + 16),
+        XIO_E_IN_PORGRESS               = (XIO_BASE_STATUS + 17),
+        XIO_E_INVALID_VERSION           = (XIO_BASE_STATUS + 18),
+        XIO_E_NOT_SESSION               = (XIO_BASE_STATUS + 19),
+        XIO_E_OPEN_FAILED               = (XIO_BASE_STATUS + 20),
+        XIO_E_READ_FAILED               = (XIO_BASE_STATUS + 21),
+        XIO_E_WRITE_FAILED              = (XIO_BASE_STATUS + 22),
+        XIO_E_CLOSE_FAILED              = (XIO_BASE_STATUS + 23),
+        XIO_E_UNSUCCESSFUL              = (XIO_BASE_STATUS + 24),
+        XIO_E_MSG_CANCELED              = (XIO_BASE_STATUS + 25),
+        XIO_E_MSG_CANCEL_FAILED         = (XIO_BASE_STATUS + 26),
+        XIO_E_MSG_NOT_FOUND             = (XIO_BASE_STATUS + 27),
+        XIO_E_MSG_FLUSHED               = (XIO_BASE_STATUS + 28)
 };
 
-enum xio_ev_loop_events {
+enum xo_ev_loop_events {
 	XIO_POLLIN			= 0x001,
 	XIO_POLLOUT			= 0x002,
 	XIO_POLLLT			= 0x004   /**< level-triggered poll */
@@ -155,6 +158,8 @@ enum xio_msg_flags {
 enum xio_session_event {
 	XIO_SESSION_REJECT_EVENT,
 	XIO_SESSION_TEARDOWN_EVENT,
+        XIO_SESSION_NEW_CONNECTION_EVENT,         /**< new connection event   */
+        XIO_SESSION_CONNECTION_TEARDOWN_EVENT,    /**< connection teardown event*/
 	XIO_SESSION_CONNECTION_CLOSED_EVENT,
 	XIO_SESSION_CONNECTION_DISCONNECTED_EVENT,
 	XIO_SESSION_CONNECTION_ERROR_EVENT,
@@ -211,6 +216,18 @@ struct xio_session_attr {
 };
 
 /**
+ * @struct xio_connection_params
+ * @brief connection parameters structure
+ */
+struct xio_connection_params {
+        void                    *user_context;  /**< private user context to */
+                                                /**< pass to connection      */
+                                                /**< oriented callbacks      */
+};
+
+
+
+/**
  * @struct xio_context_params
  * @brief context parameters structure
  */
@@ -242,7 +259,7 @@ struct xio_vmsg {
 	size_t			data_iovlen;	/* number of items in vector  */
 	struct xio_iovec_ex	data_iov[XIO_MAX_IOV];
 };
-
+#if 0
 struct xio_msg {
 	struct xio_vmsg		in;
 	struct xio_vmsg		out;
@@ -265,13 +282,65 @@ struct xio_msg {
 	struct xio_msg		*next;          /* internal use */
 	struct xio_msg		**prev;		/* internal use */
 };
+#endif
+/**
+ * @struct xio_msg_pdata
+ * @brief message private data structure used internaly by the library
+ */
+struct xio_msg_pdata {
+        struct xio_msg          *next;          /**< internal library usage   */
+        struct xio_msg          **prev;         /**< internal library usage   */
+};
 
+
+
+/**
+ * @struct xio_msg
+ * @brief  accelio's message definition
+ *
+ * An object representing a message received from or to be sent to another
+ * peer.
+ */
+struct xio_msg {
+        struct xio_vmsg         in;             /**< incoming side of message */
+        struct xio_vmsg         out;            /**< outgoing side of message */
+
+        union {
+                uint64_t                sn;     /**< unique message serial    */
+                                                /**< number returned by the   */
+                                                /**< library                  */
+
+                struct xio_msg          *request;  /**< responder - attached  */
+                                                   /**< the request           */
+        };
+
+        enum xio_msg_type       type;           /**< message type             */
+        int                     more_in_batch;  /**< more messages ahead bit  */
+        int                     status;         /**< message returned status  */
+        int                     flags;          /**< message flags mask       */
+        enum xio_receipt_result receipt_res;    /**< the receipt result if    */
+                                                /**< required                 */
+        int                     reserved;       /**< reseved for padding      */
+        uint64_t                timestamp;      /**< submission timestamp     */
+        void                    *user_context;  /**< private user data        */
+                                                /**< not sent to the peer     */
+        struct xio_msg_pdata    pdata;          /**< accelio private data     */
+        struct xio_msg          *next;          /**< send list of messages    */
+};
+
+
+/**
+ * @struct xio_session_event_data
+ * @brief  session enent callback parmaters
+ */
 struct xio_session_event_data {
-	struct xio_connection	*conn;		/* optional connection for
-						   connection events */
-	void			*conn_user_context;
-	enum xio_session_event	event;
-	enum xio_status		reason;
+        struct xio_connection   *conn;              /**< connection object   */
+        void                    *conn_user_context; /**< user context        */
+        enum xio_session_event  event;              /**< the specific event  */
+        enum xio_status         reason;             /**< elaborated message  */
+        void                    *private_data;      /**< user private data   */
+                                                    /**< relevant to reject  */
+        size_t                  private_data_len;   /**< private length      */
 };
 
 struct xio_new_session_req {
@@ -737,7 +806,7 @@ int xio_reject(struct xio_session *session,
  * RETURNS: success (0), or a (negative) error value.
  */
 int xio_send_response(struct xio_msg *rsp);
-
+#if 0
 /**
  * xio_poll_completions - poll the connection queue for number of completions
  *
@@ -748,6 +817,27 @@ int xio_send_response(struct xio_msg *rsp);
  */
 int xio_poll_completions(struct xio_connection *conn,
 			 struct timespec *timeout);
+#endif 
+/**
+ * attempts to read at least min_nr events and up to nr events
+ * from the completion queue assiociated with connection conn
+ *
+ *
+ * @param[in] conn      The xio connection handle
+ * @param[in] min_nr    read at least min_nr events
+ * @param[in] nr        read no more then nr events
+ * @param[in] timeout   specifies the amount of time to wait for events,
+ *                      where a NULL timeout waits until at least min_nr
+ *                      events have been seen.
+ *
+ * @returns On success,  xio_poll_completions() returns the number of events
+ *          read: 0 if no events are available, or less than min_nr if the
+ *          timeout has elapsed.  the failure return -1.
+ */
+int xio_poll_completions(struct xio_connection *conn,
+                         long min_nr, long nr,
+                         struct timespec *timeout);
+
 
 /*---------------------------------------------------------------------------*/
 /* XIO default event loop API						     */

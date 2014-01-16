@@ -49,6 +49,8 @@
 #include "xio_observer.h"
 #include "xio_common.h"
 #include "xio_context.h"
+#include "xio_schedwork.h"
+
 
 /* friend routins from xio_ev_loop.c */
 extern void *xio_ev_loop_init(unsigned long flags, struct xio_context *ctx);
@@ -75,9 +77,9 @@ void xio_context_unreg_observer(struct xio_context *ctx,
 }
 
 /*---------------------------------------------------------------------------*/
-/* xio_ctx_open								     */
+/* xio_ctx_create								     */
 /*---------------------------------------------------------------------------*/
-struct xio_context *xio_ctx_open(unsigned int flags,
+struct xio_context *xio_ctx_create(unsigned int flags,
 				 struct xio_loop_ops *loop_ops,
 				 struct task_struct *worker,
 				 int polling_timeout,
@@ -154,15 +156,15 @@ cleanup1:
 	kfree(ctx);
 
 cleanup0:
-	ERROR_LOG("xio_ctx_open ailed\n");
+	ERROR_LOG("xio_ctx_create ailed\n");
 
 	return NULL;
 }
 
 /*---------------------------------------------------------------------------*/
-/* xio_ctx_close							     */
+/* xio_ctx_destroy							     */
 /*---------------------------------------------------------------------------*/
-void xio_ctx_close(struct xio_context *ctx)
+void xio_ctx_destroy(struct xio_context *ctx)
 {
 	xio_observable_notify_all_observers(&ctx->observable,
 					    XIO_CONTEXT_EVENT_CLOSE, NULL);
@@ -176,3 +178,43 @@ void xio_ctx_close(struct xio_context *ctx)
 
 	kfree(ctx);
 }
+
+/*---------------------------------------------------------------------------*/
+/* xio_ctx_timer_add                                                         */
+/*---------------------------------------------------------------------------*/
+int xio_ctx_timer_add(struct xio_context *ctx,
+                      int msec_duration, void *data,
+                      void (*timer_fn)(void *data),
+                      xio_ctx_timer_handle_t *handle_out)
+{
+        int retval;
+
+        retval = xio_schedwork_add(ctx->sched_work,
+                                   msec_duration, data,
+                                   timer_fn, handle_out);
+        if (retval) {
+                xio_set_error(EINVAL);
+                ERROR_LOG("xio_schedwork_add failed. %m\n");
+        }
+
+        return retval;
+}
+
+/*---------------------------------------------------------------------------*/
+/* xio_ctx_timer_del                                                         */
+/*---------------------------------------------------------------------------*/
+int xio_ctx_timer_del(struct xio_context *ctx,
+                      xio_ctx_timer_handle_t timer_handle)
+{
+        int retval;
+
+        retval = xio_schedwork_del(ctx->sched_work, timer_handle);
+        if (retval) {
+                xio_set_error(EINVAL);
+                ERROR_LOG("xio_schedwork_add failed. %m\n");
+        }
+
+        return retval;
+}
+
+
