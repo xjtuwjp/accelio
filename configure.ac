@@ -137,8 +137,8 @@ AC_MSG_RESULT([$enable_kernel_module])
 
 if test "$enable_kernel_module" != "no"; then
 	AC_CONFIG_SUBDIRS([src/kernel/hello])
-	AC_CONFIG_SUBDIRS([src/kernel/rdma])
 	AC_CONFIG_SUBDIRS([src/kernel/xio])
+	AC_CONFIG_SUBDIRS([src/kernel/rdma])
 fi
 
 if test "$enable_kernel_module" != "no"; then
