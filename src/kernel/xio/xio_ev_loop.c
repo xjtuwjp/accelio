@@ -1,10 +1,10 @@
 /*
- * Copyright (c) 2013 Mellanox Technologies®. All rights reserved.
+ * Copyright (c) 2013 Mellanox Technologies��. All rights reserved.
  *
  * This software is available to you under a choice of one of two licenses.
  * You may choose to be licensed under the terms of the GNU General Public
  * License (GPL) Version 2, available from the file COPYING in the main
- * directory of this source tree, or the Mellanox Technologies® BSD license
+ * directory of this source tree, or the Mellanox Technologies�� BSD license
  * below:
  *
  *      - Redistribution and use in source and binary forms, with or without
@@ -19,7 +19,7 @@
  *        disclaimer in the documentation and/or other materials
  *        provided with the distribution.
  *
- *      - Neither the name of the Mellanox Technologies® nor the names of its
+ *      - Neither the name of the Mellanox Technologies�� nor the names of its
  *        contributors may be used to endorse or promote products derived from
  *        this software without specific prior written permission.
  *
@@ -47,38 +47,33 @@
 #include "xio_observer.h"
 #include "xio_common.h"
 #include "xio_context.h"
+#include "xio_ev_loop.h"
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 13, 0)
+/**
+ * llist_reverse_order - reverse order of a llist chain
+ * @head:       first item of the list to be reversed
+ *
+ * Reverse the order of a chain of llist entries and return the
+ * new first entry.
+ */
+struct llist_node *llist_reverse_order(struct llist_node *head)
+{
+	struct llist_node *new_head = NULL;
+
+	while (head) {
+		struct llist_node *tmp = head;
+		head = head->next;
+		tmp->next = new_head;
+		new_head = tmp;
+	}
+
+	return new_head;
+}
+#endif
 
 /*---------------------------------------------------------------------------*/
-/* defines								     */
-/*---------------------------------------------------------------------------*/
-
-#define XIO_EV_LOOP_WAKE	1
-#define XIO_EV_LOOP_STOP	(1 << 1)
-#define XIO_EV_LOOP_DOWN	(1 << 2)
-
-/*---------------------------------------------------------------------------*/
-/* structs								     */
-/*---------------------------------------------------------------------------*/
-
-struct xio_ev_loop {
-	struct xio_context *ctx;
-	unsigned long	flags;
-	unsigned long	states;
-	union {
-		struct {
-			union {
-				wait_queue_head_t wait;
-				struct tasklet_struct tasklet;
-			};
-		};
-		struct workqueue_struct *workqueue;
-	};
-	/* for thread, tasklet and for stopped workqueue  */
-	struct llist_head ev_llist;
-};
-
-/*---------------------------------------------------------------------------*/
-/* forward declarations							     */
+/* forward declarations	of private API					     */
 /*---------------------------------------------------------------------------*/
 
 static int priv_ev_loop_run(void *loop_hndl);
@@ -94,10 +89,10 @@ static int priv_ev_add_workqueue(void *loop_hndl, struct xio_ev_data *event);
 /*---------------------------------------------------------------------------*/
 /* xio_ev_loop_init							     */
 /*---------------------------------------------------------------------------*/
-void *xio_ev_loop_init(unsigned long flags, struct xio_context *ctx)
+void *xio_ev_loop_init(unsigned long flags, struct xio_context *ctx,
+		       struct xio_loop_ops *loop_ops)
 {
-	struct xio_ev_loop	*loop;
-	struct xio_loop_ops	*ops;
+	struct xio_ev_loop *loop;
 	char queue_name[64];
 
 	loop = kzalloc(sizeof(struct xio_ev_loop), GFP_KERNEL);
@@ -112,17 +107,24 @@ void *xio_ev_loop_init(unsigned long flags, struct xio_context *ctx)
 	init_llist_head(&loop->ev_llist);
 
 	/* use default implementation */
-	ops = &ctx->loop_ops;
-	ops->ev_loop_run  = priv_ev_loop_run;
-	ops->ev_loop_stop = priv_ev_loop_stop;
+	loop->run  = priv_ev_loop_run;
+	loop->stop = priv_ev_loop_stop;
+	loop->loop_object = loop;
 
 	switch (flags) {
+	case XIO_LOOP_USER_LOOP:
+		/* override with user provided routines and object */
+		loop->run  = loop_ops->run;
+		loop->stop = loop_ops->stop;
+		loop->add_event = loop_ops->add_event;
+		loop->loop_object = loop_ops->ev_loop;
+		break;
 	case XIO_LOOP_GIVEN_THREAD:
-		ops->ev_loop_add_event = priv_ev_add_thread;
+		loop->add_event = priv_ev_add_thread;
 		init_waitqueue_head(&loop->wait);
 		break;
 	case XIO_LOOP_TASKLET:
-		ops->ev_loop_add_event = priv_ev_add_tasklet;
+		loop->add_event = priv_ev_add_tasklet;
 		tasklet_init(&loop->tasklet, priv_ev_loop_run_tasklet,
 			     (unsigned long)loop);
 		break;
@@ -141,7 +143,7 @@ void *xio_ev_loop_init(unsigned long flags, struct xio_context *ctx)
 			ERROR_LOG("workqueue create failed.\n");
 			goto cleanup1;
 		}
-		ops->ev_loop_add_event = priv_ev_add_workqueue;
+		loop->add_event = priv_ev_add_workqueue;
 		break;
 	default:
 		ERROR_LOG("wrong type. %lu\n", flags);
@@ -259,7 +261,7 @@ static int priv_ev_add_workqueue(void *loop_hndl, struct xio_ev_data *event)
 	}
 
 	event->work.func = priv_ev_loop_run_work;
-	queue_work(loop->workqueue, &event->work);
+	queue_work_on(loop->ctx->cpuid, loop->workqueue, &event->work);
 
 	return 0;
 }
@@ -273,10 +275,13 @@ static void priv_ev_loop_run_tasklet(unsigned long data)
 	struct xio_ev_data	*tev;
 	struct llist_node	*node;
 
-	while (!llist_empty(&loop->ev_llist)) {
-		node = llist_del_first(&loop->ev_llist);
-		tev = llist_entry(node, struct xio_ev_data, ev_llist);
-		tev->handler(tev->data);
+	while ((node = llist_del_all(&loop->ev_llist)) != NULL) {
+	       node = llist_reverse_order(node);
+	       while (node) {
+		       tev = llist_entry(node, struct xio_ev_data, ev_llist);
+		       node = llist_next(node);
+		       tev->handler(tev->data);
+	       }
 	}
 }
 
@@ -308,19 +313,31 @@ int priv_ev_loop_run(void *loop_hndl)
 				  (void *) loop->ctx->worker, get_current());
 			goto cleanup0;
 		}
+		if (loop->ctx->cpuid != smp_processor_id()) {
+			TRACE_LOG("worker on core(%d) scheduled to(%d).\n",
+				  smp_processor_id(), loop->ctx->cpuid);
+			set_cpus_allowed_ptr(get_current(),
+					     cpumask_of(loop->ctx->cpuid));
+		}
 		break;
 	case XIO_LOOP_TASKLET:
+		/* TODO tasklet affinity!!! */
 		/* were events added to list while in STOP state ? */
 		if (!llist_empty(&loop->ev_llist))
 			tasklet_schedule(&loop->tasklet);
 		return 0;
 	case XIO_LOOP_WORKQUEUE:
 		/* were events added to list while in STOP state ? */
-		while (!llist_empty(&loop->ev_llist)) {
-			node = llist_del_first(&loop->ev_llist);
-			tev = llist_entry(node, struct xio_ev_data, ev_llist);
-			tev->work.func = priv_ev_loop_run_work;
-			queue_work(loop->workqueue, &tev->work);
+		while ((node = llist_del_all(&loop->ev_llist)) != NULL) {
+		       node = llist_reverse_order(node);
+		       while (node) {
+			       tev = llist_entry(node, struct xio_ev_data,
+					         ev_llist);
+			       node = llist_next(node);
+			       tev->work.func = priv_ev_loop_run_work;
+			       queue_work_on(loop->ctx->cpuid, loop->workqueue,
+					     &tev->work);
+		       }
 		}
 		return 0;
 	default:
@@ -335,11 +352,15 @@ retry_wait:
 
 retry_dont_wait:
 
-	while (!llist_empty(&loop->ev_llist)) {
-		node = llist_del_first(&loop->ev_llist);
-		tev = llist_entry(node, struct xio_ev_data, ev_llist);
-		tev->handler(tev->data);
+	while ((node = llist_del_all(&loop->ev_llist)) != NULL) {
+	       node = llist_reverse_order(node);
+	       while (node) {
+		       tev = llist_entry(node, struct xio_ev_data, ev_llist);
+		       node = llist_next(node);
+		       tev->handler(tev->data);
+	       }
 	}
+
 	/* "race point" */
 	clear_bit(XIO_EV_LOOP_WAKE, &loop->states);
 
@@ -388,19 +409,4 @@ void priv_ev_loop_stop(void *loop_hndl)
 	default:
 		break;
 	}
-}
-
-int xio_ev_loop_run(struct xio_context *ctx)
-{
-	return ctx->loop_ops.ev_loop_run(ctx->ev_loop);
-}
-
-void xio_ev_loop_stop(struct xio_context *ctx)
-{
-	ctx->loop_ops.ev_loop_stop(ctx->ev_loop);
-}
-
-int xio_ev_loop_add_event(struct xio_context *ctx, struct xio_ev_data *data)
-{
-	return ctx->loop_ops.ev_loop_add_event(ctx->ev_loop, data);
 }

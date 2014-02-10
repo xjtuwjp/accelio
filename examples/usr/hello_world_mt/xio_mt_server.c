@@ -44,7 +44,10 @@
 
 #define MAX_THREADS		4
 #define QUEUE_DEPTH		512
-#define HW_PRINT_COUNTER	1000000
+#define PRINT_COUNTER		1000000
+#define TEST_DISCONNECT		0
+#define DISCONNECT_NR		2000000
+
 
 struct portals_vec {
 	int			vec_len;
@@ -52,21 +55,24 @@ struct portals_vec {
 	const char		*vec[MAX_THREADS];
 };
 
-struct hw_thread_data {
+struct thread_data {
 	char			portal[64];
 	int			affinity;
 	int			cnt;
+	int			nsent;
+	int			pad;
 	struct xio_msg		rsp[QUEUE_DEPTH];
-	void			*loop;
+	struct xio_context	*ctx;
 	pthread_t		thread_id;
 };
 
 /* server private data */
-struct hw_server_data {
-	struct hw_thread_data	tdata[MAX_THREADS];
+struct server_data {
+	struct xio_context	*ctx;
+	struct thread_data	tdata[MAX_THREADS];
 };
 
-static struct portals_vec *portals_get(struct hw_server_data *server_data,
+static struct portals_vec *portals_get(struct server_data *server_data,
 				const char *uri, void *user_context)
 {
 	/* fill portals array and return it. */
@@ -92,17 +98,18 @@ static void portals_free(struct portals_vec *portals)
 /*---------------------------------------------------------------------------*/
 /* process_request							     */
 /*---------------------------------------------------------------------------*/
-static void process_request(struct hw_thread_data *tdata,
+static void process_request(struct thread_data *tdata,
 			    struct xio_msg *req)
 {
-	if (++tdata->cnt == HW_PRINT_COUNTER) {
+	if (++tdata->cnt == PRINT_COUNTER) {
 		if (req->in.header.iov_base)
-		  ((char *)(req->in.header.iov_base))[req->in.header.iov_len]
+			((char *)
+			 (req->in.header.iov_base))[req->in.header.iov_len]
 			  = 0;
 		printf("thread [%d] tid:%p - message: [%"PRIu64"] - %s\n",
-				tdata->affinity,
-				(void *)pthread_self(),
-				(req->sn + 1), (char *)req->in.header.iov_base);
+		       tdata->affinity,
+		       (void *)pthread_self(),
+		       (req->sn + 1), (char *)req->in.header.iov_base);
 		tdata->cnt = 0;
 	}
 	req->in.header.iov_base	  = NULL;
@@ -118,7 +125,7 @@ static int on_request(struct xio_session *session,
 			int more_in_batch,
 			void *cb_user_context)
 {
-	struct hw_thread_data	*tdata = cb_user_context;
+	struct thread_data	*tdata = cb_user_context;
 	int i = req->sn % QUEUE_DEPTH;
 
 	/* process request */
@@ -128,6 +135,16 @@ static int on_request(struct xio_session *session,
 	tdata->rsp[i].request = req;
 
 	xio_send_response(&tdata->rsp[i]);
+	tdata->nsent++;
+
+#if  TEST_DISCONNECT
+	if (tdata->nsent == DISCONNECT_NR) {
+		struct xio_connection *connection =
+			xio_get_connection(session,tdata->ctx);
+		xio_disconnect(connection);
+		return 0;
+	}
+#endif
 
 	return 0;
 }
@@ -135,7 +152,7 @@ static int on_request(struct xio_session *session,
 /*---------------------------------------------------------------------------*/
 /* asynchronous callbacks						     */
 /*---------------------------------------------------------------------------*/
-struct xio_session_ops  portal_server_ops = {
+static struct xio_session_ops  portal_server_ops = {
 	.on_session_event		=  NULL,
 	.on_new_session			=  NULL,
 	.on_msg_send_complete		=  NULL,
@@ -148,9 +165,8 @@ struct xio_session_ops  portal_server_ops = {
 /*---------------------------------------------------------------------------*/
 static void *portal_server_cb(void *data)
 {
-	struct hw_thread_data	*tdata = data;
+	struct thread_data	*tdata = data;
 	cpu_set_t		cpuset;
-	struct xio_context	*ctx;
 	struct xio_server	*server;
 	char			str[128];
 	int			i;
@@ -162,29 +178,28 @@ static void *portal_server_cb(void *data)
 
 	pthread_setaffinity_np(tdata->thread_id, sizeof(cpu_set_t), &cpuset);
 
-	/* open default event loop */
-	tdata->loop = xio_ev_loop_create();
 
 	/* create thread context for the client */
-	ctx = xio_ctx_create(NULL, tdata->loop, 0);
+	tdata->ctx = xio_context_create(NULL, 0);
 
 	/* bind a listener server to a portal/url */
 	printf("thread [%d] - listen:%s\n", tdata->affinity, tdata->portal);
-	server = xio_bind(ctx, &portal_server_ops, tdata->portal, NULL, 0, tdata);
+	server = xio_bind(tdata->ctx, &portal_server_ops, tdata->portal,
+			  NULL, 0, tdata);
 	if (server == NULL)
 		goto cleanup;
 
-	sprintf(str,"hello world header response from thread %d",
-	        tdata->affinity);
+	sprintf(str, "hello world header response from thread %d",
+		tdata->affinity);
 	/* create "hello world" message */
-	for (i = 0; i <QUEUE_DEPTH; i++) {
+	for (i = 0; i < QUEUE_DEPTH; i++) {
 		tdata->rsp[i].out.header.iov_base = strdup(str);
 		tdata->rsp[i].out.header.iov_len =
 			strlen(tdata->rsp[i].out.header.iov_base);
 	}
 
 	/* the default xio supplied main loop */
-	xio_ev_loop_run(tdata->loop);
+	xio_context_run_loop(tdata->ctx, XIO_INFINITE);
 
 	/* normal exit phase */
 	fprintf(stdout, "exit signaled\n");
@@ -193,15 +208,12 @@ static void *portal_server_cb(void *data)
 	xio_unbind(server);
 
 	/* free the message */
-	for (i = 0; i <QUEUE_DEPTH; i++)
+	for (i = 0; i < QUEUE_DEPTH; i++)
 		free(tdata->rsp[i].out.header.iov_base);
 
 cleanup:
 	/* free the context */
-	xio_ctx_destroy(ctx);
-
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&tdata->loop);
+	xio_context_destroy(tdata->ctx);
 
 	return NULL;
 }
@@ -213,18 +225,23 @@ static int on_session_event(struct xio_session *session,
 		struct xio_session_event_data *event_data,
 		void *cb_user_context)
 {
+	struct server_data *server_data = cb_user_context;
+	int		   i;
+
 	printf("session event: %s. session:%p, connection:%p, reason: %s\n",
 	       xio_session_event_str(event_data->event),
 	       session, event_data->conn,
 	       xio_strerror(event_data->reason));
 
 	switch (event_data->event) {
-	case XIO_SESSION_NEW_CONNECTION_EVENT:
-		break;
-	case XIO_SESSION_CONNECTION_CLOSED_EVENT:
+	case XIO_SESSION_CONNECTION_TEARDOWN_EVENT:
+		xio_connection_destroy(event_data->conn);
 		break;
 	case XIO_SESSION_TEARDOWN_EVENT:
 		xio_session_destroy(session);
+		for (i = 0; i < MAX_THREADS; i++)
+			xio_context_stop_loop(server_data->tdata[i].ctx, 0);
+		xio_context_stop_loop(server_data->ctx, 0);
 		break;
 	default:
 		break;
@@ -241,7 +258,7 @@ static int on_new_session(struct xio_session *session,
 			void *cb_user_context)
 {
 	struct portals_vec *portals;
-	struct hw_server_data *server_data = cb_user_context;
+	struct server_data *server_data = cb_user_context;
 
 	portals = portals_get(server_data, req->uri, req->user_context);
 
@@ -256,7 +273,7 @@ static int on_new_session(struct xio_session *session,
 /*---------------------------------------------------------------------------*/
 /* asynchronous callbacks						     */
 /*---------------------------------------------------------------------------*/
-struct xio_session_ops  server_ops = {
+static struct xio_session_ops  server_ops = {
 	.on_session_event		=  on_session_event,
 	.on_new_session			=  on_new_session,
 	.on_msg_send_complete		=  NULL,
@@ -270,57 +287,58 @@ struct xio_session_ops  server_ops = {
 int main(int argc, char *argv[])
 {
 	struct xio_server	*server;	/* server portal */
-	struct hw_server_data	server_data;
+	struct server_data	*server_data;
 	char			url[256];
-	struct xio_context	*ctx;
-	void			*loop;
 	int			i;
 	uint16_t		port = atoi(argv[2]);
 
 
-	memset(&server_data, 0, sizeof(server_data));
+	server_data = calloc(1, sizeof(*server_data));
+	if (!server_data)
+		return -1;
 
-	/* open default event loop */
-	loop	= xio_ev_loop_create();
+	xio_init();
 
 	/* create thread context for the client */
-	ctx	= xio_ctx_create(NULL, loop, 0);
+	server_data->ctx	= xio_context_create(NULL, 0);
 
 	/* create url to connect to */
 	sprintf(url, "rdma://%s:%d", argv[1], port);
 	/* bind a listener server to a portal/url */
-	server = xio_bind(ctx, &server_ops, url, NULL, 0, &server_data);
+	server = xio_bind(server_data->ctx, &server_ops,
+			  url, NULL, 0, server_data);
 	if (server == NULL)
 		goto cleanup;
 
 
 	/* spawn portals */
 	for (i = 0; i < MAX_THREADS; i++) {
-		server_data.tdata[i].affinity = i+1;
+		server_data->tdata[i].affinity = i+1;
 		port += 1;
-		sprintf(server_data.tdata[i].portal, "rdma://%s:%d",
+		sprintf(server_data->tdata[i].portal, "rdma://%s:%d",
 			argv[1], port);
-		pthread_create(&server_data.tdata[i].thread_id, NULL,
-			       portal_server_cb, &server_data.tdata[i]);
+		pthread_create(&server_data->tdata[i].thread_id, NULL,
+			       portal_server_cb, &server_data->tdata[i]);
 	}
 
-	xio_ev_loop_run(loop);
+	xio_context_run_loop(server_data->ctx, XIO_INFINITE);
 
 	/* normal exit phase */
 	fprintf(stdout, "exit signaled\n");
 
 	/* join the threads */
 	for (i = 0; i < MAX_THREADS; i++)
-		pthread_join(server_data.tdata[i].thread_id, NULL);
+		pthread_join(server_data->tdata[i].thread_id, NULL);
 
 	/* free the server */
 	xio_unbind(server);
 cleanup:
 	/* free the context */
-	xio_ctx_destroy(ctx);
+	xio_context_destroy(server_data->ctx);
 
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&loop);
+	xio_shutdown();
+
+	free(server_data);
 
 	return 0;
 }

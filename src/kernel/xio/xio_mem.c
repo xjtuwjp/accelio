@@ -37,3 +37,12 @@
  */
 #include "xio_os.h"
 #include "xio_common.h"
+#include "xio_kernel.h"
+
+#define HUGE_PAGE_SZ			(2*1024*1024)
+
+int			  disable_huge_pages	= 0;
+int			  allocator_assigned	= 0;
+struct xio_mem_allocator  g_mem_allocator;
+struct xio_mem_allocator  *mem_allocator = &g_mem_allocator;
+

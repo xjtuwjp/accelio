@@ -129,7 +129,6 @@ struct raio_session_data {
 	struct xio_connection		*conn;
 
 	struct xio_context		*ctx;
-	void				*loop;
 	raio_context_t			io_ctx;
 
 	LIST_ENTRY(raio_session_data)   rsd_siblings;
@@ -287,13 +286,12 @@ static int on_session_event(struct xio_session *session,
 	switch (event_data->event) {
 	case XIO_SESSION_CONNECTION_CLOSED_EVENT:
 		break;
-	case XIO_SESSION_REJECT_EVENT:
-	case XIO_SESSION_CONNECTION_DISCONNECTED_EVENT:
-		xio_disconnect(event_data->conn);
+	case XIO_SESSION_CONNECTION_TEARDOWN_EVENT:
+		xio_connection_destroy(event_data->conn);
 		session_data->disconnected = 1;
 		break;
 	case XIO_SESSION_TEARDOWN_EVENT:
-		xio_ev_loop_stop(session_data->loop, 0);  /* exit */
+		xio_context_stop_loop(session_data->ctx, 0);  /* exit */
 		break;
 	default:
 		printf("libraio: unexpected session event: %s. reason: %s\n",
@@ -332,7 +330,7 @@ static void on_submit_answer(struct xio_msg *rsp)
 	if (io_u->ses_data->min_nr != 0) {
 		if (io_u->ses_data->io_ctx->io_u_completed_nr >=
 		    io_u->ses_data->min_nr)
-			xio_ev_loop_stop(io_u->ses_data->loop, 0);
+			xio_context_stop_loop(io_u->ses_data->ctx, 0);
 	}
 }
 
@@ -361,7 +359,7 @@ static int on_response(struct xio_session *session,
 	case RAIO_CMD_IO_DESTROY:
 		/* break the loop */
 		session_data->cmd_rsp = rsp;
-		xio_ev_loop_stop(session_data->loop, 0);
+		xio_context_stop_loop(session_data->ctx, 0);
 		break;
 	default:
 		printf("libraio: unknown answer %d\n", command);
@@ -400,6 +398,8 @@ __RAIO_PUBLIC int raio_open(const struct sockaddr *addr, socklen_t addrlen,
 		0
 	};
 
+	xio_init();
+
 	session_data = calloc(1, sizeof(*session_data));
 
 	session_data->cmd_req.out.header.iov_base =
@@ -409,11 +409,8 @@ __RAIO_PUBLIC int raio_open(const struct sockaddr *addr, socklen_t addrlen,
 	session_data->cmd_req.out.data_iovlen = 0;
 
 
-	/* open default event loop */
-	session_data->loop = xio_ev_loop_create();
-
 	/* create thread context for the client */
-	session_data->ctx = xio_ctx_create(NULL, session_data->loop, 0);
+	session_data->ctx = xio_context_create(NULL, 0);
 
 	/* create url to connect to */
 	sprintf(url, "rdma://%s:%d",
@@ -440,7 +437,7 @@ __RAIO_PUBLIC int raio_open(const struct sockaddr *addr, socklen_t addrlen,
 	xio_send_request(session_data->conn, &session_data->cmd_req);
 
 	/* the default xio supplied main loop */
-	xio_ev_loop_run(session_data->loop);
+	xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 
 	if (session_data->disconnected) {
 		retval = -1;
@@ -471,19 +468,16 @@ __RAIO_PUBLIC int raio_open(const struct sockaddr *addr, socklen_t addrlen,
 cleanup1:
 	if (session_data->session) {
 		if (!session_data->disconnected) {
-			xio_ev_loop_run(session_data->loop);
+			xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 			xio_session_destroy(session_data->session);
-		}
-		else
+		} else {
 		     xio_session_destroy(session_data->session);
+		}
 		session_data->session = NULL;
 	}
 cleanup:
 	/* free the context */
-	xio_ctx_destroy(session_data->ctx);
-
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&session_data->loop);
+	xio_context_destroy(session_data->ctx);
 
 	errno = raio_err;
 
@@ -521,7 +515,7 @@ __RAIO_PUBLIC int raio_close(int fd)
 	xio_send_request(session_data->conn, &session_data->cmd_req);
 
 	/* the default xio supplied main loop */
-	xio_ev_loop_run(session_data->loop);
+	xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 
 	retval = unpack_close_answer(
 			session_data->cmd_rsp->in.header.iov_base,
@@ -539,14 +533,13 @@ cleanup:
 
 	if (!session_data->disconnected) {
 		xio_disconnect(session_data->conn);
-		xio_ev_loop_run(session_data->loop);
+		xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 		xio_session_destroy(session_data->session);
 	}
 	/* free the context */
-	xio_ctx_destroy(session_data->ctx);
+	xio_context_destroy(session_data->ctx);
 
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&session_data->loop);
+	xio_shutdown();
 
 	free(session_data);
 
@@ -576,7 +569,7 @@ __RAIO_PUBLIC int raio_fstat(int fd, struct stat64 *stbuf)
 	xio_send_request(session_data->conn, &session_data->cmd_req);
 
 	/* the default xio supplied main loop */
-	xio_ev_loop_run(session_data->loop);
+	xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 
 	if (session_data->disconnected) {
 		errno  = ECONNRESET;
@@ -630,7 +623,7 @@ __RAIO_PUBLIC int raio_setup(int fd, int maxevents, raio_context_t *ctxp)
 	/* send first message */
 	xio_send_request(session_data->conn, &session_data->cmd_req);
 
-	xio_ev_loop_run(session_data->loop);
+	xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 
 	if (session_data->disconnected)
 		return -ECONNRESET;
@@ -697,7 +690,7 @@ __RAIO_PUBLIC int raio_destroy(raio_context_t ctx)
 
 	xio_send_request(session_data->conn, &session_data->cmd_req);
 
-	xio_ev_loop_run(session_data->loop);
+	xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 	if (session_data->disconnected) {
 		errno =  ECONNRESET;
 		retval = -1;
@@ -767,7 +760,8 @@ __RAIO_PUBLIC int raio_submit(raio_context_t ctx,
 			io_u->req.out.data_iov[0].iov_base = ios[i]->u.c.buf;
 			io_u->req.out.data_iov[0].iov_len = ios[i]->u.c.nbytes;
 			if (ios[i]->u.c.mr)
-				io_u->req.out.data_iov[0].mr = ios[i]->u.c.mr->omr;
+				io_u->req.out.data_iov[0].mr =
+					ios[i]->u.c.mr->omr;
 			else
 				io_u->req.out.data_iov[0].mr = NULL;
 			io_u->req.in.data_iovlen  = 0;
@@ -776,7 +770,8 @@ __RAIO_PUBLIC int raio_submit(raio_context_t ctx,
 			io_u->req.in.data_iov[0].iov_base = ios[i]->u.c.buf;
 			io_u->req.in.data_iov[0].iov_len = ios[i]->u.c.nbytes;
 			if (ios[i]->u.c.mr)
-				io_u->req.in.data_iov[0].mr = ios[i]->u.c.mr->omr;
+				io_u->req.in.data_iov[0].mr =
+					ios[i]->u.c.mr->omr;
 			else
 				io_u->req.in.data_iov[0].mr = NULL;
 			io_u->req.in.data_iovlen  = 1;
@@ -847,7 +842,7 @@ restart:
 				     nr , NULL);
 #else
 		session_data->min_nr  = (min_nr ? min_nr : 1);
-		xio_ev_loop_run(session_data->loop);
+		xio_context_run_loop(session_data->ctx, XIO_INFINITE);
 		if (session_data->disconnected)
 			return -ECONNRESET;
 #endif

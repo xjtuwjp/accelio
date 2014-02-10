@@ -79,7 +79,7 @@ struct xio_test_config {
 
 struct thread_stat_data {
 	uint64_t print_counter;
-	uint64_t cnt ;
+	uint64_t cnt;
 	uint64_t start_time;
 	size_t	 txlen;
 	size_t	 rxlen;
@@ -94,7 +94,6 @@ struct thread_data {
 	struct xio_session	*session;
 	struct xio_connection	*conn;
 	struct xio_context	*ctx;
-	void			*loop;
 	struct msg_pool		*pool;
 	pthread_t		thread_id;
 };
@@ -203,7 +202,9 @@ static void process_response(struct thread_data	*tdata, struct xio_msg *rsp)
 		data_len = tdata->stat.txlen > tdata->stat.rxlen ?
 			   tdata->stat.txlen : tdata->stat.rxlen;
 		data_len = data_len/1024;
-		tdata->stat.print_counter = (data_len ? PRINT_COUNTER/data_len : PRINT_COUNTER);
+		tdata->stat.print_counter = (data_len ?
+					     PRINT_COUNTER/data_len :
+					     PRINT_COUNTER);
 		tdata->stat.print_counter /=  MAX_THREADS;
 	}
 	if (++tdata->stat.cnt == tdata->stat.print_counter) {
@@ -216,10 +217,12 @@ static void process_response(struct thread_data	*tdata, struct xio_msg *rsp)
 		double rxbw = (1.0*pps*tdata->stat.rxlen/ONE_MB);
 
 		printf("transactions per second: %"PRIu64", bandwidth: " \
-		       "TX %.2f MB/s, RX: %.2f MB/s, length: TX: %zd B, RX: %zd B\n",
+		       "TX %.2f MB/s, RX: %.2f MB/s, length: TX: %zd B, " \
+		       "RX: %zd B\n",
 		       pps, txbw, rxbw, tdata->stat.txlen, tdata->stat.rxlen);
 		get_time(timeb, 40);
-		printf("[%s] thread [%d] - tid:%p  - message [%"PRIu64"] %s - %s\n",
+		printf("[%s] thread [%d] - tid:%p  - message [%"PRIu64"] " \
+		       "%s - %s\n",
 		       timeb,
 		       tdata->affinity,
 		       (void *)pthread_self(),
@@ -249,19 +252,19 @@ static void *worker_thread(void *data)
 	tdata->pool = msg_pool_alloc(MAX_POOL_SIZE,
 				     test_config.hdr_len, test_config.data_len,
 				     0, 0);
-
-	/* open default event loop */
-	tdata->loop = xio_ev_loop_create();
-
+	if (tdata->pool == NULL) {
+		fprintf(stderr, "failed to alloc pool\n");
+		return NULL;
+	}
 
 	/* create thread context for the client */
-	tdata->ctx = xio_ctx_create(NULL, tdata->loop, test_config.poll_timeout);
+	tdata->ctx = xio_context_create(NULL, test_config.poll_timeout);
 
 	/* connect the session  */
 	tdata->conn = xio_connect(tdata->session, tdata->ctx,
 				  tdata->cid, NULL, tdata);
 
-	for (i = 0;  i < 150; i++) {
+	for (i = 0;  i < 50; i++) {
 		/* create transaction */
 		msg = msg_pool_get(tdata->pool);
 		if (msg == NULL)
@@ -288,12 +291,12 @@ static void *worker_thread(void *data)
 					tdata->session,
 					xio_strerror(xio_errno()));
 			msg_pool_put(tdata->pool, msg);
-			return 0;
+			break;
 		}
 	}
 
 	/* the default xio supplied main loop */
-	xio_ev_loop_run(tdata->loop);
+	xio_context_run_loop(tdata->ctx, XIO_INFINITE);
 
 	/* normal exit phase */
 	fprintf(stdout, "exit signaled\n");
@@ -302,10 +305,7 @@ static void *worker_thread(void *data)
 		msg_pool_free(tdata->pool);
 
 	/* free the context */
-	xio_ctx_destroy(tdata->ctx);
-
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&tdata->loop);
+	xio_context_destroy(tdata->ctx);
 
 	fprintf(stdout, "thread exit\n");
 	return NULL;
@@ -327,12 +327,17 @@ static int on_session_event(struct xio_session *session,
 
 	switch (event_data->event) {
 	case XIO_SESSION_REJECT_EVENT:
+	case XIO_SESSION_CONNECTION_ERROR_EVENT:
+		break;
+	case XIO_SESSION_CONNECTION_CLOSED_EVENT:
 	case XIO_SESSION_CONNECTION_DISCONNECTED_EVENT:
-		xio_disconnect(event_data->conn);
+		break;
+	case XIO_SESSION_CONNECTION_TEARDOWN_EVENT:
+		xio_connection_destroy(event_data->conn);
 		break;
 	case XIO_SESSION_TEARDOWN_EVENT:
 		for (i = 0; i < MAX_THREADS; i++)
-			xio_ev_loop_stop(session_data->tdata[i].loop, 0);
+			xio_context_stop_loop(session_data->tdata[i].ctx, 0);
 		break;
 	default:
 		break;
@@ -373,7 +378,7 @@ static int on_response(struct xio_session *session,
 
 	/* recycle the message and fill new request */
 	msg_write(msg, NULL, test_config.hdr_len,
-		       NULL, test_config.data_len);
+		  NULL, test_config.data_len);
 
 	if (xio_send_request(tdata->conn, msg) == -1) {
 		if (xio_errno() != EAGAIN)

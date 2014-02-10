@@ -148,10 +148,11 @@ struct xio_connection *xio_session_find_connection(
 		struct xio_conn *conn)
 {
 	struct xio_connection		*connection;
+	struct xio_context		*ctx = conn->transport_hndl->ctx;
 
-	list_for_each_entry(connection, &session->connections_list,
-			    connections_list_entry) {
-		if (connection->conn == conn)
+	list_for_each_entry(connection, &ctx->ctx_list, ctx_list_entry) {
+		if (connection->conn == conn &&
+		    connection->session == session)
 			return connection;
 	}
 
@@ -167,9 +168,8 @@ struct xio_connection *xio_session_find_connection_by_ctx(
 {
 	struct xio_connection		*connection;
 
-	list_for_each_entry(connection, &session->connections_list,
-			    connections_list_entry) {
-		if (connection->ctx == ctx)
+	list_for_each_entry(connection, &ctx->ctx_list, ctx_list_entry) {
+		if (connection->session == session)
 			return connection;
 	}
 	return NULL;
@@ -326,13 +326,31 @@ void xio_session_notify_connection_disconnected(struct xio_session *session,
 }
 
 /*---------------------------------------------------------------------------*/
+/* xio_session_notify_connection_refused				     */
+/*---------------------------------------------------------------------------*/
+void xio_session_notify_connection_refused(struct xio_session *session,
+					  struct xio_connection *connection,
+					  enum xio_status reason)
+{
+	struct xio_session_event_data  event = {
+		.event = XIO_SESSION_CONNECTION_REFUSED_EVENT,
+		.reason = reason,
+		.conn = connection,
+		.conn_user_context = connection->cb_user_context
+	};
+
+	if (session->ses_ops.on_session_event)
+		session->ses_ops.on_session_event(
+				session, &event,
+				session->cb_user_context);
+}
+
+/*---------------------------------------------------------------------------*/
 /* xio_session_notify_connection_teardown				     */
 /*---------------------------------------------------------------------------*/
 void xio_session_notify_connection_teardown(struct xio_session *session,
 					  struct xio_connection *connection)
 {
-	int notify;
-
 	struct xio_session_event_data  event = {
 		.event = XIO_SESSION_CONNECTION_TEARDOWN_EVENT,
 		.reason = XIO_E_SUCCESS,
@@ -340,10 +358,7 @@ void xio_session_notify_connection_teardown(struct xio_session *session,
 		.conn_user_context = connection->cb_user_context
 	};
 
-	notify = (!session->disable_teardown  ||
-		  session->type != XIO_SESSION_CLIENT);
-
-	if (session->ses_ops.on_session_event && notify)
+	if (session->ses_ops.on_session_event)
 		session->ses_ops.on_session_event(
 				session, &event,
 				session->cb_user_context);
@@ -372,13 +387,93 @@ static void xio_session_pre_teardown(struct xio_session *session)
 /*---------------------------------------------------------------------------*/
 /* xio_session_post_teardown						     */
 /*---------------------------------------------------------------------------*/
-static void xio_session_post_teardown(struct xio_session *session)
+void xio_session_post_teardown(struct xio_session *session)
 {
 	if (session->state == XIO_SESSION_STATE_CLOSED) {
 		TRACE_LOG("session %p released\n", session);
 		mutex_destroy(&session->lock);
 		kfree(session);
 	}
+}
+
+
+/*---------------------------------------------------------------------------*/
+/* xio_on_fin_req_send_comp				                     */
+/*---------------------------------------------------------------------------*/
+int xio_on_fin_req_send_comp(struct xio_connection *connection,
+			struct xio_task *task)
+{
+	TRACE_LOG("got fin request send completion. session:%p, connection:%p\n",
+		  connection->session, connection);
+
+
+	xio_connection_fin_put(connection);
+
+	return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+/* xio_on_fin_rsp_recv				                             */
+/*---------------------------------------------------------------------------*/
+int xio_on_fin_rsp_recv(struct xio_connection *connection,
+			struct xio_task *task)
+{
+	TRACE_LOG("got fin response. session:%p, connection:%p\n",
+		  connection->session, connection);
+
+	xio_connection_release_fin(connection, task->sender_task->omsg);
+
+	/* recycle the task */
+	xio_tasks_pool_put(task->sender_task);
+	task->sender_task = NULL;
+	xio_tasks_pool_put(task);
+
+	xio_connection_fin_put(connection);
+
+	return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+/* xio_on_fin_req_recv				                             */
+/*---------------------------------------------------------------------------*/
+int xio_on_fin_req_recv(struct xio_connection *connection,
+			struct xio_task *task)
+{
+	int notify;
+
+	TRACE_LOG("fin request received. session:%p, connection:%p\n",
+		  connection->session, connection);
+
+	/* if both peers issued fin requests simultanously */
+	if (connection->state == XIO_CONNECTION_STATE_CLOSING)
+		xio_connection_fin_addref(connection);
+
+	notify = (connection->state == XIO_CONNECTION_STATE_ONLINE);
+
+	xio_ack_disconnect(connection, task);
+	if (notify)
+		xio_session_notify_connection_closed(connection->session,
+						     connection);
+
+	return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+/* xio_on_fin_rsp_send_comp						     */
+/*---------------------------------------------------------------------------*/
+int xio_on_fin_rsp_send_comp(struct xio_connection *connection,
+			     struct xio_task *task)
+{
+	TRACE_LOG("fin response send completion received. "  \
+		  "session:%p, connection:%p\n",
+		  connection->session, connection);
+
+	xio_connection_release_fin(connection, task->omsg);
+	xio_tasks_pool_put(task);
+
+	xio_connection_fin_put(connection);
+
+	return 0;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -477,7 +572,8 @@ static int xio_on_rsp_recv(struct xio_connection *connection,
 
 	task->connection = connection;
 
-	xio_connection_remove_in_flight(connection, omsg, 1);
+	xio_connection_remove_in_flight(connection, omsg);
+	omsg->type = task->tlv_type;
 
 	/* store the task in io queue */
 	xio_connection_queue_io_task(connection, task);
@@ -547,7 +643,7 @@ static int xio_on_rsp_send_comp(
 		struct xio_task *task)
 {
 	/* remove the message from in flight queue */
-	xio_connection_remove_in_flight(connection, task->omsg, 0);
+	xio_connection_remove_in_flight(connection, task->omsg);
 
 	/*
 	 * completion of receipt
@@ -605,12 +701,19 @@ int xio_on_conn_disconnected(struct xio_session *session,
 			     struct xio_conn *conn,
 			     union xio_conn_event_data *event_data)
 {
-	struct xio_connection		*connection, *tmp_connection;
+	struct xio_connection *connection, *tmp_connection;
 
-	if (session->lead_connection && session->lead_connection->conn == conn)
+	if (session->lead_connection &&
+	    session->lead_connection->conn == conn)
 		connection = session->lead_connection;
-	else
+	else if (session->redir_connection &&
+		 session->redir_connection->conn == conn)
+		connection = session->redir_connection;
+	else {
+		spin_lock(&session->connections_list_lock);
 		connection = xio_session_find_connection(session, conn);
+		spin_unlock(&session->connections_list_lock);
+	}
 
 	if (connection && connection->conn) {
 		connection->state = XIO_CONNECTION_STATE_DISCONNECTED;
@@ -618,13 +721,11 @@ int xio_on_conn_disconnected(struct xio_session *session,
 				session, connection,
 				XIO_E_SESSION_DISCONECTED);
 
-		if (session->type == XIO_SESSION_SERVER) {
 			xio_session_disconnect(session, connection);
-			return 0;
-		}
 	} else {
 		xio_conn_close(conn, &session->observer);
 	}
+
 	if (session->type == XIO_SESSION_CLIENT) {
 		/* only on client */
 		/* also send disconnect to connections that do no have conn */
@@ -639,6 +740,7 @@ int xio_on_conn_disconnected(struct xio_session *session,
 			}
 		}
 	}
+
 	return 0;
 }
 
@@ -649,73 +751,11 @@ int xio_on_conn_closed(struct xio_session *session,
 		       struct xio_conn *conn,
 		       union xio_conn_event_data *event_data)
 {
-	struct xio_connection		*connection;
-	int				reason;
-
-	DEBUG_LOG("session:%p - conn:%p close complete\n", session, conn);
-
-	switch (session->state) {
-	case XIO_SESSION_STATE_ACCEPTED:
-		if (session->type == XIO_SESSION_SERVER)
-			reason = XIO_E_SESSION_DISCONECTED;
-		else
-			reason = XIO_E_SESSION_REFUSED;
-		break;
-	case XIO_SESSION_STATE_REJECTED:
-		reason = XIO_E_SESSION_REJECTED;
-		break;
-	case XIO_SESSION_STATE_REDIRECTED:
-		reason = XIO_E_SESSION_REDIRECTED;
-		break;
-	case XIO_SESSION_STATE_REFUSED:
-		reason = XIO_E_SESSION_REFUSED;
-		break;
-	default:
-		reason = XIO_E_SESSION_DISCONECTED;
-		break;
-	}
+	TRACE_LOG("session:%p - conn:%p close complete\n", session, conn);
 
 	/* no more notifications */
 	xio_conn_unreg_observer(conn, &session->observer);
 
-	/* leading connection */
-	if (session->lead_connection &&
-	    session->lead_connection->conn == conn) {
-		xio_connection_close(session->lead_connection);
-		session->lead_connection = NULL;
-		TRACE_LOG("lead connection is closed\n");
-	} else if (session->redir_connection &&
-		   session->redir_connection->conn == conn) {
-		xio_connection_close(session->redir_connection);
-		session->redir_connection = NULL;
-		TRACE_LOG("redirected connection is closed\n");
-	} else {
-		connection = xio_session_find_connection(session, conn);
-		xio_connection_flush_tasks(connection);
-		xio_session_free_connection(connection);
-	}
-	if (session->disable_teardown)
-		return 0;
-
-	mutex_lock(&session->lock);
-	if (session->state != XIO_SESSION_STATE_CLOSING &&
-	    session->state != XIO_SESSION_STATE_CLOSED &&
-	    !session->connections_nr && !session->lead_connection &&
-	    !session->redir_connection) {
-		session->in_notify = 1;
-		/* change the state to closing in case session is not
-		 * destroyed on the callback */
-		if (session->state == XIO_SESSION_STATE_ONLINE)
-			session->state = XIO_SESSION_STATE_CLOSING;
-		xio_session_notify_teardown(
-			session,
-			reason);
-		session->in_notify = 0;
-		mutex_unlock(&session->lock);
-		xio_session_post_teardown(session);
-	} else {
-		mutex_unlock(&session->lock);
-	}
 	return 0;
 }
 
@@ -758,21 +798,46 @@ int xio_on_conn_error(struct xio_session *session,
 
 	};
 	struct xio_session  *the_session = session;
+
 	struct xio_connection *connection =
 				xio_session_find_connection(session, conn);
 
-	ev_data.conn =  connection;
-	ev_data.conn_user_context =
-		(connection) ? connection->cb_user_context : NULL;
+	/* enable the teardown */
+	session->disable_teardown  = 0;
+	session->lead_connection = NULL;
+	session->redir_connection = NULL;
 
-	/* disables the lead connection */
-	if (session->lead_connection && session->lead_connection == connection)
-		session->lead_connection = NULL;
+	if ((session->state == XIO_SESSION_STATE_CONNECT) ||
+	    (session->state == XIO_SESSION_STATE_REDIRECTED)) {
+		session->state = XIO_SESSION_STATE_REFUSED;
+		while (!list_empty(&session->connections_list)) {
+			connection = list_first_entry(
+					&session->connections_list,
+					struct xio_connection,
+					connections_list_entry);
+			ev_data.conn =  connection;
+			ev_data.conn_user_context =
+				connection->cb_user_context;
 
-	if (session->ses_ops.on_session_event)
-		session->ses_ops.on_session_event(
-				the_session, &ev_data,
-				session->cb_user_context);
+			if (session->ses_ops.on_session_event)
+				session->ses_ops.on_session_event(
+						the_session, &ev_data,
+						session->cb_user_context);
+			connection->state = XIO_CONNECTION_STATE_DISCONNECTED;
+			xio_session_disconnect(session, connection);
+		}
+	} else {
+		ev_data.conn =  connection;
+		ev_data.conn_user_context =
+			(connection) ? connection->cb_user_context : NULL;
+
+		if (session->ses_ops.on_session_event)
+			session->ses_ops.on_session_event(
+					the_session, &ev_data,
+					session->cb_user_context);
+		connection->state = XIO_CONNECTION_STATE_DISCONNECTED;
+		xio_session_disconnect(session, connection);
+	}
 
 	return 0;
 }
@@ -785,9 +850,16 @@ int xio_on_new_message(struct xio_session *session,
 		       union xio_conn_event_data *event_data)
 {
 	struct xio_task		*task  = event_data->msg.task;
-	struct xio_connection	*connection;
+	struct xio_connection	*connection = NULL;
 	int			retval = -1;
 	int			tlv_type;
+
+
+
+	if (task->sender_task) {
+		session = task->sender_task->session;
+		connection = task->sender_task->connection;
+	}
 
 	if (session == NULL) {
 		session = xio_find_session(task);
@@ -797,20 +869,23 @@ int xio_on_new_message(struct xio_session *session,
 			return -1;
 		}
 	}
-	connection = xio_session_find_connection(session, conn);
+
 	if (connection == NULL) {
-		/* leading connection is refused */
-		if (session->lead_connection &&
-		    session->lead_connection->conn == conn) {
-			connection = session->lead_connection;
-		} else if (session->redir_connection &&
-			   session->redir_connection->conn == conn) {
-			/* redirected connection is refused */
-			connection = session->redir_connection;
-		} else {
-			ERROR_LOG("failed to find connection\n");
-			xio_tasks_pool_put(task);
-			return -1;
+		connection = xio_session_find_connection(session, conn);
+		if (connection == NULL) {
+			/* leading connection is refused */
+			if (session->lead_connection &&
+					session->lead_connection->conn == conn) {
+				connection = session->lead_connection;
+			} else if (session->redir_connection &&
+					session->redir_connection->conn == conn) {
+				/* redirected connection is refused */
+				connection = session->redir_connection;
+			} else {
+				ERROR_LOG("failed to find connection\n");
+				xio_tasks_pool_put(task);
+				return -1;
+			}
 		}
 	}
 
@@ -883,7 +958,7 @@ int xio_on_send_completion(struct xio_session *session,
 		retval = xio_on_ow_req_send_comp(connection, task);
 		break;
 	case XIO_FIN_REQ:
-		retval = 0;
+		retval = xio_on_fin_req_send_comp(connection, task);
 		break;
 	case XIO_FIN_RSP:
 		retval = xio_on_fin_rsp_send_comp(connection, task);
@@ -1154,8 +1229,6 @@ cleanup:
 int xio_session_disconnect(struct xio_session *session,
 			     struct xio_connection *connection)
 {
-	int teardown = 0;
-
 	/* prepare to disconnect */
 
 	/* flush all messages from in flight message queue to in queue */
@@ -1165,30 +1238,11 @@ int xio_session_disconnect(struct xio_session *session,
 	xio_connection_notify_msgs_flush(connection);
 
 	if ((connection->state == XIO_CONNECTION_STATE_CLOSED) ||
-	    (connection->state == XIO_CONNECTION_STATE_DISCONNECTED))
-		xio_session_notify_connection_teardown(session, connection);
-
-	/* remove the connection from the session's connections list */
-	if (connection->conn) {
-		xio_conn_close(connection->conn, &session->observer);
-	} else {
-		if ((connection->state == XIO_CONNECTION_STATE_DISCONNECTED) ||
-		    (connection->state == XIO_CONNECTION_STATE_CLOSED)) {
-			spin_lock(&session->connections_list_lock);
-			teardown = (session->connections_nr == 1);
-			spin_unlock(&session->connections_list_lock);
-			xio_session_free_connection(connection);
-		} else {
-			teardown = (session->connections_nr == 0);
-		}
-		if (teardown && !session->lead_connection &&
-		    !session->redir_connection) {
-			session->in_notify = 1;
-			xio_session_notify_teardown(
-						session,
-						XIO_E_SESSION_DISCONECTED);
-			session->in_notify = 0;
-			xio_session_post_teardown(session);
+	    (connection->state == XIO_CONNECTION_STATE_DISCONNECTED)) {
+		if (session->lead_connection == connection)
+			xio_connection_destroy(connection);
+		else {
+		    xio_session_notify_connection_teardown(session, connection);
 		}
 	}
 
@@ -1274,6 +1328,8 @@ const char *xio_session_event_str(enum xio_session_event event)
 		return "connection closed";
 	case XIO_SESSION_CONNECTION_DISCONNECTED_EVENT:
 		return "connection disconnected";
+	case XIO_SESSION_CONNECTION_REFUSED_EVENT:
+		return "connection refused";
 	case XIO_SESSION_CONNECTION_TEARDOWN_EVENT:
 		return "connection teardown";
 	case XIO_SESSION_CONNECTION_ERROR_EVENT:

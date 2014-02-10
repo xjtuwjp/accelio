@@ -59,7 +59,7 @@ static inline struct xio_thread_data *xio_thread_data_get(void);
 /*---------------------------------------------------------------------------*/
 static struct xio_thread_data *xio_thread_data_init(void)
 {
-	struct xio_thread_data *td = calloc(1, sizeof(*td));
+	struct xio_thread_data *td = ucalloc(1, sizeof(*td));
 	/* it ok for NULL */
 	pthread_setspecific(thread_data_key, td);
 
@@ -81,7 +81,9 @@ static inline struct xio_thread_data *xio_thread_data_get(void)
 /*---------------------------------------------------------------------------*/
 static void xio_thread_data_free(void *ptr)
 {
-	    free(ptr);
+	    ufree(ptr);
+	    pthread_setspecific(thread_data_key, NULL);
+	    pthread_key_delete(thread_data_key);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -98,8 +100,9 @@ void xio_thread_data_construct(void)
 void xio_thread_data_destruct(void)
 {
 	/* for main thread only */
-	free(xio_thread_data_get());
+	ufree(xio_thread_data_get());
 	pthread_setspecific(thread_data_key, NULL);
+	pthread_key_delete(thread_data_key);
 }
 
 /*---------------------------------------------------------------------------*/

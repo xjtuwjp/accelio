@@ -44,30 +44,37 @@
 #include "libxio.h"
 
 #define MAX_THREADS		4
-#define HW_PRINT_COUNTER	400000
+#define PRINT_COUNTER		400000
+#define TEST_DISCONNECT		0
+#define DISCONNECT_NR		3000000
 
-struct hw_thread_data {
+
+struct thread_data {
 	int			cid;
 	int			affinity;
 	uint64_t		cnt;
+	uint64_t		nsent;
+	uint64_t		nrecv;
 	struct xio_session	*session;
 	struct xio_connection	*conn;
 	struct xio_context	*ctx;
 	struct xio_msg		req;
-	void			*loop;
 	pthread_t		thread_id;
 };
 
 
 /* private session data */
-struct hw_session_data {
+struct session_data {
 	struct xio_session	*session;
-	struct hw_thread_data	tdata[MAX_THREADS];
+	struct thread_data	tdata[MAX_THREADS];
 };
 
-static void *hw_worker_thread(void *data)
+/*---------------------------------------------------------------------------*/
+/* worker_thread							     */
+/*---------------------------------------------------------------------------*/
+static void *worker_thread(void *data)
 {
-	struct hw_thread_data	*tdata = data;
+	struct thread_data	*tdata = data;
 	cpu_set_t		cpuset;
 	char			str[128];
 
@@ -78,11 +85,8 @@ static void *hw_worker_thread(void *data)
 
 	pthread_setaffinity_np(tdata->thread_id, sizeof(cpu_set_t), &cpuset);
 
-	/* open default event loop */
-	tdata->loop = xio_ev_loop_create();
-
 	/* create thread context for the client */
-	tdata->ctx = xio_ctx_create(NULL, tdata->loop, 0);
+	tdata->ctx = xio_context_create(NULL, 0);
 
 	/* connect the session  */
 	tdata->conn = xio_connect(tdata->session, tdata->ctx,
@@ -90,7 +94,7 @@ static void *hw_worker_thread(void *data)
 
 	/* create "hello world" message */
 	memset(&tdata->req, 0, sizeof(tdata->req));
-	sprintf(str,"hello world header request from thread %d",
+	sprintf(str, "hello world header request from thread %d",
 		tdata->affinity);
 	tdata->req.out.header.iov_base = strdup(str);
 	tdata->req.out.header.iov_len =
@@ -98,18 +102,18 @@ static void *hw_worker_thread(void *data)
 
 	/* send first message */
 	xio_send_request(tdata->conn, &tdata->req);
+	tdata->nsent++;
 
 	/* the default xio supplied main loop */
-	xio_ev_loop_run(tdata->loop);
+	xio_context_run_loop(tdata->ctx, XIO_INFINITE);
 
 	/* normal exit phase */
 	fprintf(stdout, "exit signaled\n");
 
-	/* free the context */
-	xio_ctx_destroy(tdata->ctx);
+	free(tdata->req.out.header.iov_base);
 
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&tdata->loop);
+	/* free the context */
+	xio_context_destroy(tdata->ctx);
 
 	fprintf(stdout, "thread exit\n");
 	return NULL;
@@ -118,10 +122,10 @@ static void *hw_worker_thread(void *data)
 /*---------------------------------------------------------------------------*/
 /* process_response							     */
 /*---------------------------------------------------------------------------*/
-static void process_response(struct hw_thread_data  *tdata,
+static void process_response(struct thread_data  *tdata,
 			     struct xio_msg *rsp)
 {
-	if (++tdata->cnt == HW_PRINT_COUNTER) {
+	if (++tdata->cnt == PRINT_COUNTER) {
 		((char *)(rsp->in.header.iov_base))[rsp->in.header.iov_len] = 0;
 		printf("thread [%d] - tid:%p  - message: [%"PRIu64"] - %s\n",
 		       tdata->affinity,
@@ -141,7 +145,7 @@ static int on_session_event(struct xio_session *session,
 		struct xio_session_event_data *event_data,
 		void *cb_user_context)
 {
-	struct hw_session_data *session_data = cb_user_context;
+	struct session_data *session_data = cb_user_context;
 	int			i;
 
 	printf("%s. reason: %s\n",
@@ -149,13 +153,12 @@ static int on_session_event(struct xio_session *session,
 	       xio_strerror(event_data->reason));
 
 	switch (event_data->event) {
-	case XIO_SESSION_REJECT_EVENT:
-	case XIO_SESSION_CONNECTION_DISCONNECTED_EVENT:
-		xio_disconnect(event_data->conn);
+	case XIO_SESSION_CONNECTION_TEARDOWN_EVENT:
+		xio_connection_destroy(event_data->conn);
 		break;
 	case XIO_SESSION_TEARDOWN_EVENT:
 		for (i = 0; i < MAX_THREADS; i++)
-			xio_ev_loop_stop(session_data->tdata[i].loop, 0);
+			xio_context_stop_loop(session_data->tdata[i].ctx, 0);
 		break;
 	default:
 		break;
@@ -173,7 +176,9 @@ static int on_response(struct xio_session *session,
 			int more_in_batch,
 			void *cb_user_context)
 {
-	struct hw_thread_data  *tdata = cb_user_context;
+	struct thread_data  *tdata = cb_user_context;
+
+	tdata->nrecv++;
 
 	/* process the incoming message */
 	process_response(tdata, rsp);
@@ -181,8 +186,20 @@ static int on_response(struct xio_session *session,
 	/* acknowlege xio that response is no longer needed */
 	xio_release_response(rsp);
 
+#if  TEST_DISCONNECT
+	if (tdata->nrecv == DISCONNECT_NR) {
+		xio_disconnect(tdata->conn);
+		return 0;
+	}
+
+	if (tdata->nsent == DISCONNECT_NR)
+		return 0;
+#endif
+
+
 	/* resend the message */
 	xio_send_request(tdata->conn, &tdata->req);
+	tdata->nsent++;
 
 	return 0;
 }
@@ -190,7 +207,7 @@ static int on_response(struct xio_session *session,
 /*---------------------------------------------------------------------------*/
 /* callbacks								     */
 /*---------------------------------------------------------------------------*/
-struct xio_session_ops ses_ops = {
+static struct xio_session_ops ses_ops = {
 	.on_session_event		=  on_session_event,
 	.on_session_established		=  NULL,
 	.on_msg				=  on_response,
@@ -204,7 +221,7 @@ int main(int argc, char *argv[])
 {
 	int			i;
 	char			url[256];
-	struct hw_session_data	session_data;
+	struct session_data	session_data;
 
 	/* client session attributes */
 	struct xio_session_attr attr = {
@@ -212,6 +229,8 @@ int main(int argc, char *argv[])
 		NULL,	  /* no need to pass the server private data */
 		0
 	};
+
+	xio_init();
 
 	memset(&session_data, 0, sizeof(session_data));
 	/* create url to connect to */
@@ -231,7 +250,7 @@ int main(int argc, char *argv[])
 		/* all threads are working on the same session */
 		session_data.tdata[i].session	= session_data.session;
 		pthread_create(&session_data.tdata[i].thread_id, NULL,
-			       hw_worker_thread, &session_data.tdata[i]);
+			       worker_thread, &session_data.tdata[i]);
 	}
 
 	/* join the threads */
@@ -242,7 +261,7 @@ int main(int argc, char *argv[])
 	xio_session_destroy(session_data.session);
 
 cleanup:
-
+	xio_shutdown();
 
 	return 0;
 }

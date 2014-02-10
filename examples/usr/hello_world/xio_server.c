@@ -43,29 +43,33 @@
 
 #define QUEUE_DEPTH		512
 #define PRINT_COUNTER		4000000
+#define TEST_DISCONNECT		1
+#define DISCONNECT_NR		2000000
+
 
 /* server private data */
-struct hw_server_data {
-	struct xio_msg  rsp[QUEUE_DEPTH];	/* global message */
+struct server_data {
+	struct xio_context	*ctx;
+	uint64_t		nsent;
+	uint64_t		cnt;
+	struct xio_msg		rsp[QUEUE_DEPTH];	/* global message */
 };
 
 /*---------------------------------------------------------------------------*/
 /* process_request							     */
 /*---------------------------------------------------------------------------*/
-static void process_request(struct xio_msg *req)
+static void process_request(struct server_data *server_data, struct xio_msg *req)
 {
-	static int cnt = 0;
 
-	if (++cnt == PRINT_COUNTER) {
+	if (++server_data->cnt == PRINT_COUNTER) {
 		((char *)(req->in.header.iov_base))[req->in.header.iov_len] = 0;
 		printf("message: [%"PRIu64"] - %s\n",
-				(req->sn + 1), (char *)req->in.header.iov_base);
-		cnt = 0;
+		       (req->sn + 1), (char *)req->in.header.iov_base);
+		server_data->cnt = 0;
 	}
 	req->in.header.iov_base	  = NULL;
 	req->in.header.iov_len	  = 0;
 	req->in.data_iovlen	  = 0;
-
 }
 
 /*---------------------------------------------------------------------------*/
@@ -75,18 +79,20 @@ static int on_session_event(struct xio_session *session,
 		struct xio_session_event_data *event_data,
 		void *cb_user_context)
 {
+	struct server_data *server_data = cb_user_context;
+
 	printf("session event: %s. session:%p, connection:%p, reason: %s\n",
 	       xio_session_event_str(event_data->event),
 	       session, event_data->conn,
 	       xio_strerror(event_data->reason));
 
 	switch (event_data->event) {
-	case XIO_SESSION_NEW_CONNECTION_EVENT:
-		break;
-	case XIO_SESSION_CONNECTION_CLOSED_EVENT:
+	case XIO_SESSION_CONNECTION_TEARDOWN_EVENT:
+		xio_connection_destroy(event_data->conn);
 		break;
 	case XIO_SESSION_TEARDOWN_EVENT:
 		xio_session_destroy(session);
+		xio_context_stop_loop(server_data->ctx, 0);  /* exit */
 		break;
 	default:
 		break;
@@ -118,24 +124,33 @@ static int on_request(struct xio_session *session,
 			int more_in_batch,
 			void *cb_user_context)
 {
-	struct hw_server_data *server_data = cb_user_context;
+	struct server_data *server_data = cb_user_context;
 	int i = req->sn % QUEUE_DEPTH;
 
 	/* process request */
-	process_request(req);
+	process_request(server_data, req);
 
 	/* attach request to response */
 	server_data->rsp[i].request = req;
 
 	xio_send_response(&server_data->rsp[i]);
+	server_data->nsent++;
 
+#if  TEST_DISCONNECT
+	if (server_data->nsent == DISCONNECT_NR) {
+		struct xio_connection *connection =
+			xio_get_connection(session, server_data->ctx);
+		xio_disconnect(connection);
+		return 0;
+	}
+#endif
 	return 0;
 }
 
 /*---------------------------------------------------------------------------*/
 /* asynchronous callbacks						     */
 /*---------------------------------------------------------------------------*/
-struct xio_session_ops  server_ops = {
+static struct xio_session_ops  server_ops = {
 	.on_session_event		=  on_session_event,
 	.on_new_session			=  on_new_session,
 	.on_msg_send_complete		=  NULL,
@@ -149,10 +164,8 @@ struct xio_session_ops  server_ops = {
 int main(int argc, char *argv[])
 {
 	struct xio_server	*server;	/* server portal */
-	struct hw_server_data	server_data;
+	struct server_data	server_data;
 	char			url[256];
-	struct xio_context	*ctx;
-	void			*loop;
 	int			i;
 
 	if (argc < 2) {
@@ -163,28 +176,26 @@ int main(int argc, char *argv[])
 	/* initialize library */
 	xio_init();
 
-	/* open default event loop */
-	loop	= xio_ev_loop_create();
-
-	/* create thread context for the client */
-	ctx	= xio_ctx_create(NULL, loop, 0);
-
-	/* create "hello world" message */
+		/* create "hello world" message */
 	memset(&server_data, 0, sizeof(server_data));
-	for (i = 0; i <QUEUE_DEPTH; i++) {
+	for (i = 0; i < QUEUE_DEPTH; i++) {
 		server_data.rsp[i].out.header.iov_base =
 			strdup("hello world header response");
 		server_data.rsp[i].out.header.iov_len =
 			strlen(server_data.rsp[i].out.header.iov_base) + 1;
 	}
 
+	/* create thread context for the client */
+	server_data.ctx	= xio_context_create(NULL, 0);
+
+
 	/* create url to connect to */
 	sprintf(url, "rdma://%s:%s", argv[1], argv[2]);
 	/* bind a listener server to a portal/url */
-	server = xio_bind(ctx, &server_ops, url, NULL, 0, &server_data);
+	server = xio_bind(server_data.ctx, &server_ops, url, NULL, 0, &server_data);
 	if (server) {
 		printf("listen to %s\n", url);
-		xio_ev_loop_run(loop);
+		xio_context_run_loop(server_data.ctx, XIO_INFINITE);
 
 		/* normal exit phase */
 		fprintf(stdout, "exit signaled\n");
@@ -194,15 +205,15 @@ int main(int argc, char *argv[])
 	}
 
 	/* free the message */
-	for (i = 0; i <QUEUE_DEPTH; i++)
+	for (i = 0; i < QUEUE_DEPTH; i++)
 		free(server_data.rsp[i].out.header.iov_base);
 
 	/* free the context */
-	xio_ctx_destroy(ctx);
+	xio_context_destroy(server_data.ctx);
 
-	/* destroy the default loop */
-	xio_ev_loop_destroy(&loop);
+	xio_shutdown();
 
 	return 0;
 }
+
 

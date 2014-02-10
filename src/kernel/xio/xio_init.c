@@ -38,6 +38,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
+#include "xio_os.h"
 #include "libxio.h"
 #include "xio_observer.h"
 #include "xio_common.h"
@@ -70,8 +71,8 @@ static void __exit xio_cleanup_module(void)
 module_init(xio_init_module);
 module_exit(xio_cleanup_module);
 
-EXPORT_SYMBOL(xio_ctx_create);
-EXPORT_SYMBOL(xio_ctx_destroy);
+EXPORT_SYMBOL(xio_context_create);
+EXPORT_SYMBOL(xio_context_destroy);
 
 EXPORT_SYMBOL(xio_context_reg_observer);
 EXPORT_SYMBOL(xio_context_unreg_observer);
@@ -93,9 +94,9 @@ EXPORT_SYMBOL(xio_unreg_transport);
 EXPORT_SYMBOL(memcpyv);
 EXPORT_SYMBOL(memclonev);
 
-EXPORT_SYMBOL(xio_ev_loop_add_event);
-EXPORT_SYMBOL(xio_ev_loop_stop);
-EXPORT_SYMBOL(xio_ev_loop_run);
+EXPORT_SYMBOL(xio_context_add_event);
+EXPORT_SYMBOL(xio_context_stop_loop);
+EXPORT_SYMBOL(xio_context_run_loop);
 
 EXPORT_SYMBOL(xio_uri_to_ss);
 EXPORT_SYMBOL(xio_session_create);
@@ -108,6 +109,9 @@ EXPORT_SYMBOL(xio_unbind);
 EXPORT_SYMBOL(xio_connect);
 EXPORT_SYMBOL(xio_disconnect);
 
+EXPORT_SYMBOL(xio_get_connection);
+EXPORT_SYMBOL(xio_connection_destroy);
+
 EXPORT_SYMBOL(xio_send_request);
 EXPORT_SYMBOL(xio_send_response);
 EXPORT_SYMBOL(xio_release_response);
@@ -116,3 +120,4 @@ EXPORT_SYMBOL(xio_write_tlv);
 EXPORT_SYMBOL(xio_read_tlv);
 EXPORT_SYMBOL(xio_iov_length);
 EXPORT_SYMBOL(xio_iovex_length);
+

@@ -89,14 +89,16 @@ enum xio_optlevel {
 };
 
 enum xio_optname {
-	XIO_OPTNAME_ENABLE_MEM_POOL,	    /**< enables the internal rdma  */
-					    /**< memory pool		    */
+	XIO_OPTNAME_ENABLE_MEM_POOL,	  /**< enables the internal rdma      */
+					  /**< memory pool		      */
 	XIO_OPTNAME_DISABLE_HUGETBL,      /**< disable huge pages allocations */
-	XIO_OPTNAME_LOG_FN,		   /**< set user log function	   */
-	XIO_OPTNAME_LOG_LEVEL,		   /**< set/get logging level      */
-	XIO_OPTNAME_ENABLE_DMA_LATENCY,    /**< enables the dma latency    */
+	XIO_OPTNAME_DISABLE_HUGETBL,	  /**< disable huge pages allocations */
+	XIO_OPTNAME_LOG_FN,		  /**< set user log function	      */
+	XIO_OPTNAME_LOG_LEVEL,		  /**< set/get logging level          */
+	XIO_OPTNAME_ENABLE_DMA_LATENCY,   /**< enables the dma latency        */
 
-	XIO_OPTNAME_RDMA_BUF_THRESHOLD,    /**< set/get rdma buffer threshold */
+	XIO_OPTNAME_RDMA_BUF_THRESHOLD,   /**< set/get rdma buffer threshold  */
+	XIO_OPTNAME_MEM_ALLOCATOR         /**< set customed allocators hooks  */
 };
 
 /*  A number random enough not to collide with different errno ranges.       */
@@ -118,32 +120,22 @@ enum xio_status {
 	XIO_E_SESSION_REFUSED           = (XIO_BASE_STATUS + 10),
 	XIO_E_SESSION_ABORTED           = (XIO_BASE_STATUS + 11),
 	XIO_E_SESSION_DISCONECTED       = (XIO_BASE_STATUS + 12),
-	XIO_E_SESSION_REJECTED          = (XIO_BASE_STATUS + 13),
-	XIO_E_SESSION_REDIRECTED        = (XIO_BASE_STATUS + 14),
-	XIO_E_BIND_FAILED               = (XIO_BASE_STATUS + 15),
-	XIO_E_TIMEOUT                   = (XIO_BASE_STATUS + 16),
-	XIO_E_IN_PORGRESS               = (XIO_BASE_STATUS + 17),
-	XIO_E_INVALID_VERSION           = (XIO_BASE_STATUS + 18),
-	XIO_E_NOT_SESSION               = (XIO_BASE_STATUS + 19),
-	XIO_E_OPEN_FAILED               = (XIO_BASE_STATUS + 20),
-	XIO_E_READ_FAILED               = (XIO_BASE_STATUS + 21),
-	XIO_E_WRITE_FAILED              = (XIO_BASE_STATUS + 22),
-	XIO_E_CLOSE_FAILED              = (XIO_BASE_STATUS + 23),
-	XIO_E_UNSUCCESSFUL              = (XIO_BASE_STATUS + 24),
-	XIO_E_MSG_CANCELED              = (XIO_BASE_STATUS + 25),
-	XIO_E_MSG_CANCEL_FAILED         = (XIO_BASE_STATUS + 26),
-	XIO_E_MSG_NOT_FOUND             = (XIO_BASE_STATUS + 27),
-	XIO_E_MSG_FLUSHED               = (XIO_BASE_STATUS + 28)
-};
-
-enum xo_ev_loop_events {
-	XIO_POLLIN			= 0x001,
-	XIO_POLLOUT			= 0x002,
-	XIO_POLLLT			= 0x004   /**< level-triggered poll */
-						  /**< cancels the default  */
-						  /**< event loop behavior  */
-						  /**< edge -triggered	    */
-
+	XIO_E_SESSION_REJECTED		= (XIO_BASE_STATUS + 13),
+	XIO_E_SESSION_REDIRECTED	= (XIO_BASE_STATUS + 14),
+	XIO_E_BIND_FAILED		= (XIO_BASE_STATUS + 15),
+	XIO_E_TIMEOUT			= (XIO_BASE_STATUS + 16),
+	XIO_E_IN_PORGRESS		= (XIO_BASE_STATUS + 17),
+	XIO_E_INVALID_VERSION		= (XIO_BASE_STATUS + 18),
+	XIO_E_NOT_SESSION		= (XIO_BASE_STATUS + 19),
+	XIO_E_OPEN_FAILED		= (XIO_BASE_STATUS + 20),
+	XIO_E_READ_FAILED		= (XIO_BASE_STATUS + 21),
+	XIO_E_WRITE_FAILED		= (XIO_BASE_STATUS + 22),
+	XIO_E_CLOSE_FAILED		= (XIO_BASE_STATUS + 23),
+	XIO_E_UNSUCCESSFUL		= (XIO_BASE_STATUS + 24),
+	XIO_E_MSG_CANCELED		= (XIO_BASE_STATUS + 25),
+	XIO_E_MSG_CANCEL_FAILED		= (XIO_BASE_STATUS + 26),
+	XIO_E_MSG_NOT_FOUND		= (XIO_BASE_STATUS + 27),
+	XIO_E_MSG_FLUSHED		= (XIO_BASE_STATUS + 28)
 };
 
 enum xio_session_flags {
@@ -156,14 +148,15 @@ enum xio_msg_flags {
 };
 
 enum xio_session_event {
-	XIO_SESSION_REJECT_EVENT,
-	XIO_SESSION_TEARDOWN_EVENT,
-        XIO_SESSION_NEW_CONNECTION_EVENT,         /**< new connection event   */
-        XIO_SESSION_CONNECTION_TEARDOWN_EVENT,    /**< connection teardown event*/
-	XIO_SESSION_CONNECTION_CLOSED_EVENT,
-	XIO_SESSION_CONNECTION_DISCONNECTED_EVENT,
-	XIO_SESSION_CONNECTION_ERROR_EVENT,
-	XIO_SESSION_ERROR_EVENT,
+	XIO_SESSION_REJECT_EVENT,		  /**< session reject event   */
+	XIO_SESSION_TEARDOWN_EVENT,		  /**< session teardown event */
+	XIO_SESSION_NEW_CONNECTION_EVENT,	  /**< new connection event   */
+	XIO_SESSION_CONNECTION_TEARDOWN_EVENT,	  /**< connection teardown event*/
+	XIO_SESSION_CONNECTION_CLOSED_EVENT,	  /**< connection closed event*/
+	XIO_SESSION_CONNECTION_DISCONNECTED_EVENT, /**< disconnection event   */
+	XIO_SESSION_CONNECTION_REFUSED_EVENT,	  /**< connection refused event*/
+	XIO_SESSION_CONNECTION_ERROR_EVENT,	  /**< connection error event */
+	XIO_SESSION_ERROR_EVENT,		  /**< session error event    */
 };
 
 #define XIO_REQUEST			2
@@ -220,9 +213,9 @@ struct xio_session_attr {
  * @brief connection parameters structure
  */
 struct xio_connection_params {
-        void                    *user_context;  /**< private user context to */
-                                                /**< pass to connection      */
-                                                /**< oriented callbacks      */
+	void			*user_context;  /**< private user context to */
+						/**< pass to connection      */
+						/**< orientedcallbacks       */
 };
 
 /**
@@ -230,9 +223,9 @@ struct xio_connection_params {
  * @brief context parameters structure
  */
 struct xio_context_params {
-        void                    *user_context;  /**< private user context to */
-                                                /**< pass to connection      */
-                                                /**< oriented callbacks      */
+	void			*user_context;  /**< private user context to */
+						/**< pass to connection      */
+						/**< oriented callbacks      */
 };
 
 struct xio_buf {
@@ -250,6 +243,15 @@ struct xio_iovec {
 struct xio_iovec_ex {
 	void			*iov_base;
 	size_t			iov_len;
+};
+
+/**
+ * @struct xio_msg_pdata
+ * @brief message private data structure used internaly by the library
+ */
+struct xio_msg_pdata {
+	struct xio_msg		*next;          /**< internal library usage   */
+	struct xio_msg		**prev;		/**< internal library usage   */
 };
 
 struct xio_vmsg {
@@ -297,7 +299,7 @@ struct xio_msg {
         uint64_t                timestamp;      /**< submission timestamp     */
         void                    *user_context;  /**< private user data        */
                                                 /**< not sent to the peer     */
-        struct xio_msg_pdata    pdata;          /**< accelio private data     */
+	struct xio_msg_pdata	pdata;		/**< accelio private data     */
         struct xio_msg          *next;          /**< send list of messages    */
 };
 
@@ -306,13 +308,13 @@ struct xio_msg {
  * @brief  session enent callback parmaters
  */
 struct xio_session_event_data {
-        struct xio_connection   *conn;              /**< connection object   */
-        void                    *conn_user_context; /**< user context        */
-        enum xio_session_event  event;              /**< the specific event  */
-        enum xio_status         reason;             /**< elaborated message  */
-        void                    *private_data;      /**< user private data   */
-                                                    /**< relevant to reject  */
-        size_t                  private_data_len;   /**< private length      */
+	struct xio_connection	*conn;		    /**< connection object   */
+	void			*conn_user_context; /**< user context        */
+	enum xio_session_event	event;		    /**< the specific event  */
+	enum xio_status		reason;		    /**< elaborated message  */
+	void			*private_data;	    /**< user private data   */
+						    /**< relevant to reject  */
+	size_t			private_data_len;   /**< private length      */
 };
 
 struct xio_new_session_req {
@@ -351,9 +353,9 @@ struct xio_ev_data {
  */
 struct xio_loop_ops {
 	void *ev_loop;
-	int (*ev_loop_run)(void *loop);
-	void (*ev_loop_stop)(void *loop);
-	int (*ev_loop_add_event)(void *loop, struct xio_ev_data *data);
+	int (*run)(void *loop);
+	void (*stop)(void *loop);
+	int (*add_event)(void *loop, struct xio_ev_data *data);
 };
 
 /**
@@ -412,6 +414,68 @@ struct xio_session_ops {
 	/* notify the user to assign a data buffer for incoming read */
 	int (*assign_data_in_buf)(struct xio_msg *msg,
 				  void *cb_user_context);
+};
+
+/**
+ *  @struct xio_mem_allocator
+ *  @brief user provided customed allocator hook functions for library usage
+ */
+struct xio_mem_allocator {
+	void	*user_context;			/**< user specific context */
+
+	/**
+	 *  allocates block of memory
+	 *
+	 *  @param[in] size		        size in bytes to allocate
+	 *  @param[in] user_context		user specific context
+	 *
+	 *  @returns pointer to allocated memory or NULL if allocate fails
+	 */
+	void * (*allocate)(size_t size, void *user_context);
+
+	/**
+	 *  allocates aligned block of memory and zero it content
+	 *
+	 *  @param[in] boundary			memory size will be a multiple
+	 *					of boundary, which must be a
+	 *					power of two and a multiple of
+	 *					sizeof(void *)
+	 *  @param[in] size			size in  bytes to allocate
+	 *  @param[in] user_context		user specific context
+	 *
+	 *  @returns pointer to allocated memory or NULL if allocate fails
+	 */
+	void *  (*memalign)(size_t boundary, size_t size, void *user_context);
+
+	/**
+	 *  deallocates block of memory
+	 *
+	 *  @param[in] ptr			pointer to allocated block
+	 *  @param[in] user_context		user specific context
+	 *
+	 */
+	void   (*free)(void *ptr, void *user_context);
+
+	/**
+	 *  allocates block of memory using huge page
+	 *
+	 *  @param[in] size			block size to allocate
+	 *  @param[in] user_context		user specific context
+	 *
+	 *  @returns pointer to allocated memory or NULL if allocate fails
+	 */
+	void * (*malloc_huge_pages)(size_t size, void *user_context);
+
+	/**
+	 *  deallocates block of memory previously allocated by
+	 *  malloc_huge_pages
+	 *
+	 *  @param[in] ptr			pointer to allocated block
+	 *  @param[in] user_context		user specific context
+	 *
+	 *  @returns pointer to block or NULL if allocate fails
+	 */
+	void   (*free_huge_pages)(void *ptr, void *user_context);
 };
 
 /**
@@ -536,7 +600,7 @@ const char *xio_session_event_str(enum xio_session_event event);
 #define XIO_LOOP_WORKQUEUE	3
 
 /*---------------------------------------------------------------------------*/
-/* xio_ctx_create                                                           */
+/* xio_ctx_create                                                            */
 /*---------------------------------------------------------------------------*/
 /**
  * xio_context - creates xio context - a context is mapped internaly to
@@ -550,34 +614,35 @@ const char *xio_session_event_str(enum xio_session_event event);
  *
  * RETURNS: xio context handle, or NULL upon error.
  */
-struct xio_context *xio_ctx_create(unsigned int flags,
-				 struct xio_loop_ops *loop_ops,
-				 struct task_struct *worker,
-				 int polling_timeout,
-				 int cpu_hint);
+struct xio_context *xio_context_create(unsigned int flags,
+				       struct xio_loop_ops *loop_ops,
+				       struct task_struct *worker,
+				       int polling_timeout,
+				       int cpu_hint);
 
 /**
- * xio_context_close - close the xio context and free its resources.
+ * closes the xio context and free its resources
  *
- * @ctx: Pointer to the xio context handle.
+ * @param[in] ctx	Pointer to the xio context handle
  *
  */
-void xio_ctx_destroy(struct xio_context *ctx);
+void xio_context_destroy(struct xio_context *ctx);
 
 /*---------------------------------------------------------------------------*/
 /* XIO session API                                                           */
 /*---------------------------------------------------------------------------*/
 /**
- * xio_session_create - open new session.
+ * creates new requester session
  *
- * @type: the type of the session.
- * @attr: structure of session attributes
- * @uri: uri to connect
- * @initial_sn: initial serial number to start with
- * @flags: message related flags as defined in xio_msg_flags
- * @cb_user_context: Private data pointer to pass to each session callback
+ * @param[in] type	The type of the session
+ * @param[in] attr	Structure of session attributes
+ * @param[in] uri	uri to connect
+ * @param[in] initial_sn Initial serial number to start with
+ * @param[in] flags	 Session related flags as defined in xio_session_flags
+ * @param[in] cb_user_context Private data pointer to pass to each session
+ *			       callback
  *
- * RETURNS: xio session context, or NULL upon error.
+ * @returns xio session context, or NULL upon error
  */
 struct xio_session *xio_session_create(
 		enum xio_session_type type,
@@ -588,11 +653,11 @@ struct xio_session *xio_session_create(
 		void *cb_user_context);
 
 /**
- * xio_session_destroy - teardown an opened session.
+ * teardown an opened session
  *
- * @session: The xio session handle.
+ * @param[in] session		The xio session handle
  *
- * RETURNS: success (0), or a (negative) error value.
+ * @returns success (0), or a (negative) error value
  */
 int xio_session_destroy(struct xio_session *session);
 
@@ -622,6 +687,15 @@ struct xio_connection *xio_connect(
  * RETURNS: success (0), or a (negative) error value.
  */
 int xio_disconnect(struct xio_connection *conn);
+
+/**
+ * free connection object
+ *
+ * @param[in] conn	The xio connection handle
+ *
+ * @returns success (0), or a (negative) error value
+ */
+int xio_connection_destroy(struct xio_connection *conn);
 
 /**
  * xio_send_request - send request.
@@ -710,9 +784,8 @@ int xio_unbind(struct xio_server *server);
  *
  * RETURNS: xio session context, or NULL upon error.
  */
-struct xio_connection *xio_get_connection(
-				struct xio_session  *session,
-				struct xio_context  *ctx);
+struct xio_connection *xio_get_connection(struct xio_session  *session,
+					  struct xio_context  *ctx);
 
 /**
  * xio_accept - accept new session or "light redirect" it to anther thread
@@ -780,14 +853,23 @@ int xio_reject(struct xio_session *session,
 int xio_send_response(struct xio_msg *rsp);
 #if 0
 /**
- * xio_poll_completions - poll the connection queue for number of completions
+ * attempts to read at least min_nr events and up to nr events
+ * from the completion queue assiociated with connection conn
  *
- * @conn: The xio connection handle.
- * @timeout:	timeout to poll
  *
- * RETURNS: success (0), or a (negative) error value.
+ * @param[in] conn	The xio connection handle
+ * @param[in] min_nr	read at least min_nr events
+ * @param[in] nr	read no more then nr events
+ * @param[in] timeout   specifies the amount of time to wait for events,
+ *			where a NULL timeout waits until at least min_nr
+ *			events have been seen.
+ *
+ * @returns On success,  xio_poll_completions() returns the number of events
+ *	    read: 0 if no events are available, or less than min_nr if the
+ *	    timeout has elapsed.  the failure return -1.
  */
 int xio_poll_completions(struct xio_connection *conn,
+			 long min_nr, long nr,
 			 struct timespec *timeout);
 #endif 
 /**
@@ -819,11 +901,11 @@ int xio_poll_completions(struct xio_connection *conn,
 /* appropriate services to xio via the xio's context open interface.	     */
 /*---------------------------------------------------------------------------*/
 
-int xio_ev_loop_run(struct xio_context *ctx);
+int xio_context_run_loop(struct xio_context *ctx);
 
-void xio_ev_loop_stop(struct xio_context *ctx);
+void xio_context_stop_loop(struct xio_context *ctx);
 
-int xio_ev_loop_add_event(struct xio_context *ctx, struct xio_ev_data *data);
+int xio_context_add_event(struct xio_context *ctx, struct xio_ev_data *data);
 
 #endif /*XIO_API_H */
 

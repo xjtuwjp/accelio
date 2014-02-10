@@ -1,10 +1,10 @@
 /*
- * Copyright (c) 2013 Mellanox Technologies®. All rights reserved.
+ * Copyright (c) 2013 Mellanox Technologies��. All rights reserved.
  *
  * This software is available to you under a choice of one of two licenses.
  * You may choose to be licensed under the terms of the GNU General Public
  * License (GPL) Version 2, available from the file COPYING in the main
- * directory of this source tree, or the Mellanox Technologies® BSD license
+ * directory of this source tree, or the Mellanox Technologies�� BSD license
  * below:
  *
  *      - Redistribution and use in source and binary forms, with or without
@@ -19,7 +19,7 @@
  *        disclaimer in the documentation and/or other materials
  *        provided with the distribution.
  *
- *      - Neither the name of the Mellanox Technologies® nor the names of its
+ *      - Neither the name of the Mellanox Technologies�� nor the names of its
  *        contributors may be used to endorse or promote products derived from
  *        this software without specific prior written permission.
  *
@@ -889,7 +889,9 @@ static void xio_conn_release(void *data)
 	struct xio_conn *conn = data;
 
 	TRACE_LOG("physical connection close. conn:%p\n", conn);
-	xio_conns_store_remove(conn->cid);
+
+	if (!conn->is_listener)
+		xio_conns_store_remove(conn->cid);
 
 	if (conn->close_time_hndl) {
 		xio_ctx_timer_del(conn->transport_hndl->ctx,
@@ -918,9 +920,9 @@ static void xio_on_context_close(struct xio_conn *conn,
 	/* remove the conn from table */
 	xio_conns_store_remove(conn->cid);
 
-	/* shut down the context and its decendent without waiting */
+	/* shut down the context and its dependent without waiting */
 	if (conn->transport->context_shutdown)
-		conn->transport->context_shutdown(conn->transport, ctx);
+		conn->transport->context_shutdown(conn->transport_hndl, ctx);
 
 	/* at that stage the conn->transport_hndl no longer exist */
 	conn->transport_hndl = NULL;
@@ -1543,6 +1545,7 @@ int xio_conn_listen(struct xio_conn *conn, const char *portal_uri,
 			return -1;
 		}
 		conn->state = XIO_CONN_STATE_LISTEN;
+		conn->is_listener = 1;
 	}
 
 	return 0;
@@ -1603,7 +1606,14 @@ static void xio_conn_delayed_close(struct kref *kref)
 
 	TRACE_LOG("xio_conn_deleyed close. conn:%p, state:%d\n",
 		  conn, conn->state);
-	if (conn->state != XIO_CONN_STATE_DISCONNECTED) {
+
+	switch (conn->state) {
+	case XIO_CONN_STATE_LISTEN:
+		/* the listener conn, called from xio_unbind */
+	case XIO_CONN_STATE_DISCONNECTED:
+		xio_conn_release(conn);
+		break;
+	default:
 		retval = xio_ctx_timer_add(
 				conn->transport_hndl->ctx,
 				XIO_CONN_CLOSE_TIMEOUT, conn,
@@ -1611,8 +1621,7 @@ static void xio_conn_delayed_close(struct kref *kref)
 				&conn->close_time_hndl);
 		if (retval)
 			ERROR_LOG("xio_conn_delayed_close failed\n");
-	} else {
-		xio_conn_release(conn);
+		break;
 	}
 }
 
@@ -1624,8 +1633,6 @@ void xio_conn_close(struct xio_conn *conn, struct xio_observer *observer)
 	TRACE_LOG("conn: [putref] ptr:%p, refcnt:%d\n", conn,
 		  atomic_read(&conn->kref.refcount));
 
-	kref_put(&conn->kref, xio_conn_delayed_close);
-
 	if (observer) {
 		xio_conn_notify_observer(
 				conn, observer,
@@ -1634,6 +1641,8 @@ void xio_conn_close(struct xio_conn *conn, struct xio_observer *observer)
 		xio_conn_unhash_observer(conn, observer);
 		xio_conn_unreg_observer(conn, observer);
 	}
+	kref_put(&conn->kref, xio_conn_delayed_close);
+
 }
 
 /*---------------------------------------------------------------------------*/

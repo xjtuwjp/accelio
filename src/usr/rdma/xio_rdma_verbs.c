@@ -57,6 +57,7 @@
 /* globals								     */
 /*---------------------------------------------------------------------------*/
 static LIST_HEAD(mr_list);
+static spinlock_t mr_list_lock;
 
 
 /*---------------------------------------------------------------------------*/
@@ -121,7 +122,7 @@ static struct xio_mr *xio_reg_mr_ex(void **addr, size_t length, int access)
 	if (list_empty(&dev_list))
 		goto cleanup3;
 
-	tmr = calloc(1, sizeof(*tmr));
+	tmr = ucalloc(1, sizeof(*tmr));
 	if (tmr == NULL) {
 		xio_set_error(errno);
 		ERROR_LOG("malloc failed. (errno=%d %m)\n", errno);
@@ -144,7 +145,7 @@ static struct xio_mr *xio_reg_mr_ex(void **addr, size_t length, int access)
 			}
 			goto cleanup2;
 		}
-		tmr_elem = calloc(1, sizeof(*tmr_elem));
+		tmr_elem = ucalloc(1, sizeof(*tmr_elem));
 		if (tmr_elem == NULL)
 			goto  cleanup1;
 		tmr_elem->dev = dev;
@@ -157,7 +158,9 @@ static struct xio_mr *xio_reg_mr_ex(void **addr, size_t length, int access)
 		}
 	}
 
+	spin_lock(&mr_list_lock);
 	list_add(&tmr->mr_list_entry, &mr_list);
+	spin_unlock(&mr_list_lock);
 
 	return tmr;
 
@@ -200,13 +203,13 @@ int xio_dereg_mr(struct xio_mr **p_tmr)
 	struct xio_mr_elem	*tmr_elem, *tmp_tmr_elem;
 	int			retval;
 
-
-
-	if (!list_empty(&tmr->dm_list)) {
+	spin_lock(&mr_list_lock);
+	if (!list_empty(&mr_list)) {
 		list_del(&tmr->mr_list_entry);
+		spin_unlock(&mr_list_lock);
 
 		list_for_each_entry_safe(tmr_elem, tmp_tmr_elem, &tmr->dm_list,
-					 dm_list_entry) {
+				dm_list_entry) {
 			retval = ibv_dereg_mr(tmr_elem->mr);
 			if (retval != 0) {
 				xio_set_error(errno);
@@ -214,11 +217,13 @@ int xio_dereg_mr(struct xio_mr **p_tmr)
 			}
 			/* Remove the item from the list. */
 			list_del(&tmr_elem->dm_list_entry);
-			free(tmr_elem);
+			ufree(tmr_elem);
 		}
-	}
-	free(tmr);
-	*p_tmr = NULL;
+		ufree(tmr);
+		*p_tmr = NULL;
+	} else
+		spin_lock(&mr_list_lock);
+
 
 	return 0;
 }
@@ -233,14 +238,13 @@ struct xio_buf *xio_alloc(size_t length)
 	size_t			real_size;
 	int			access;
 	int			alloced = 0;
-	int			retval;
 
 
 	access = IBV_ACCESS_LOCAL_WRITE |
 		 IBV_ACCESS_REMOTE_WRITE|
 		 IBV_ACCESS_REMOTE_READ;
 
-	buf = calloc(1, sizeof(*buf));
+	buf = ucalloc(1, sizeof(*buf));
 	if (!buf) {
 		xio_set_error(errno);
 		ERROR_LOG("calloc failed. (errno=%d %m)\n", errno);
@@ -250,12 +254,9 @@ struct xio_buf *xio_alloc(size_t length)
 
 	if (dev && !(dev->device_attr.device_cap_flags & IBV_DEVICE_MR_ALLOCATE)) {
 		real_size = ALIGN(length, page_size);
-		retval = posix_memalign(&buf->addr,
-				        page_size,
-					real_size);
-		if (retval) {
-			ERROR_LOG("posix_memalign failed sz:%zu. %s\n",
-				  real_size, strerror(retval));
+		buf->addr = umemalign(page_size, real_size);
+		if (buf->addr) {
+			ERROR_LOG("xio_memalign failed. sz:%zu\n", real_size);
 			goto cleanup;
 		}
 		memset(buf->addr, 0, real_size);
@@ -276,10 +277,10 @@ struct xio_buf *xio_alloc(size_t length)
 
 cleanup1:
 	if (alloced)
-		free(buf->addr);
+		ufree(buf->addr);
 
 cleanup:
-	free(buf);
+	ufree(buf);
 	return NULL;
 }
 
@@ -292,11 +293,11 @@ int xio_free(struct xio_buf **buf)
 	int			retval = 0;
 
 	if (tmr->addr_alloced)
-		free((*buf)->addr);
+		ufree((*buf)->addr);
 
 	retval = xio_dereg_mr(&tmr);
 
-	free(*buf);
+	ufree(*buf);
 	*buf = NULL;
 
 	return retval;
@@ -308,6 +309,7 @@ int xio_free(struct xio_buf **buf)
 void xio_mr_list_init(void)
 {
 	INIT_LIST_HEAD(&mr_list);
+	spin_lock_init(&mr_list_lock);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -315,13 +317,13 @@ void xio_mr_list_init(void)
 /*---------------------------------------------------------------------------*/
 int xio_mr_list_free(void)
 {
-	struct xio_mr		*tmr, *next;
+	struct xio_mr		*tmr;
 
-	list_for_each_entry_safe(tmr, next, &mr_list, mr_list_entry) {
+	while (!list_empty(&mr_list)) {
+		tmr = list_first_entry(&mr_list, struct xio_mr, mr_list_entry);
 		xio_dereg_mr(&tmr);
 	}
 
 	return 0;
 }
-
 

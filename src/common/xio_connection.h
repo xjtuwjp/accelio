@@ -47,6 +47,7 @@ enum xio_connection_state {
 		XIO_CONNECTION_STATE_CLOSING,		/* user initiate */
 		XIO_CONNECTION_STATE_CLOSED,		/* user close */
 		XIO_CONNECTION_STATE_DISCONNECTED,	/* disconnect */
+		XIO_CONNECTION_STATE_ERROR,		/* error */
 };
 
 struct xio_connection {
@@ -62,8 +63,10 @@ struct xio_connection {
 	int				conn_idx;
 	int				state;
 	int32_t				send_req_toggle;
+	int				pad;
 
 	struct kref			kref;
+	struct kref			fin_kref;
 	struct xio_msg_list		reqs_msgq;
 	struct xio_msg_list		rsps_msgq;
 	struct xio_msg_list		in_flight_reqs_msgq;
@@ -76,6 +79,7 @@ struct xio_connection {
 	struct list_head		post_io_tasks_list;
 	struct list_head		pre_send_list;
 	struct list_head		connections_list_entry;
+	struct list_head		ctx_list_entry;
 };
 
 struct xio_connection *xio_connection_init(
@@ -126,11 +130,12 @@ int xio_connection_release_read_receipt(struct xio_connection *conn,
 void xio_release_response_task(struct xio_task *task);
 
 
+int xio_connection_fin_addref(struct xio_connection *conn);
+
+int xio_connection_fin_put(struct xio_connection *conn);
+
 int xio_connection_release_fin(struct xio_connection *conn,
-			       struct xio_msg *msg);
-
-int xio_do_disconnect(struct xio_connection *conn);
-
+				   struct xio_msg *msg);
 
 int xio_ack_disconnect(struct xio_connection *conn,
 		       struct xio_task *task);
@@ -145,7 +150,7 @@ int xio_connection_flush_tasks(struct xio_connection *connection);
 int xio_connection_notify_msgs_flush(struct xio_connection *conn);
 
 int xio_connection_remove_in_flight(struct xio_connection *conn,
-				    struct xio_msg *msg, int is_req);
+				    struct xio_msg *msg);
 
 int xio_connection_remove_msg_from_queue(struct xio_connection *connection,
 					 struct xio_msg *msg);
@@ -163,6 +168,7 @@ int xio_connection_send_hello_rsp(struct xio_connection *conn,
 
 int xio_connection_release_hello(struct xio_connection *conn,
 				 struct xio_msg *msg);
+
 
 #endif /*XIO_CONNECTION_H */
 

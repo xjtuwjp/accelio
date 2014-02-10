@@ -64,16 +64,6 @@ enum xio_session_state {
 /*---------------------------------------------------------------------------*/
 /* structures				                                     */
 /*---------------------------------------------------------------------------*/
-struct xio_conn_node {
-	struct xio_conn			*conn;
-	struct list_head		connections_list_entry;
-};
-
-struct xio_portal_node {
-	char				*portal;
-	struct list_head		portals_list_entry;
-};
-
 struct xio_session {
 	uint64_t			trans_sn; /* transaction sn */
 	uint32_t			session_id;
@@ -215,8 +205,16 @@ void xio_session_notify_connection_disconnected(struct xio_session *session,
 					  struct xio_connection *connection,
 					  enum xio_status reason);
 
+void xio_session_notify_connection_refused(struct xio_session *session,
+					  struct xio_connection *connection,
+					  enum xio_status reason);
+
 int xio_session_notify_msg_error(struct xio_connection *connection,
 			         struct xio_msg *msg, enum xio_status result);
+
+void xio_session_notify_teardown(struct xio_session *session, int reason);
+
+void xio_session_post_teardown(struct xio_session *session);
 
 #endif /*XIO_SESSION_H */
 

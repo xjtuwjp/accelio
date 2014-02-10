@@ -13,6 +13,7 @@ AC_PROG_LIBTOOL
 
 # check for C compiler and the library compiler
 AC_PROG_CC
+AM_PROG_CC_C_O
 
 # automake initialisation (mandatory) and check for minimal automake API version 1.9
 AM_INIT_AUTOMAKE([1.11])
@@ -28,12 +29,11 @@ AC_CHECK_HEADERS([infiniband/verbs.h rdma/rdma_cma.h],
 AC_CHECK_HEADERS([numa.h],
 		 [mypj_found_numa_headers=yes; break;])
 
+
 AS_IF([test "x$mypj_found_verbs_headers" != "xyes"],
       [AC_MSG_ERROR([Unable to find the infiniband header files])])
 AS_IF([test "x$mypj_found_numa_headers" != "xyes"],
       [AC_MSG_ERROR([Unable to find the numactl-devel header files])])
-
-
 # Checks for typedefs, structures, and compiler characteristics.
 AC_TYPE_SIZE_T
 
@@ -102,6 +102,13 @@ AC_ARG_ENABLE([raio_build],
 			       [enable_raio_build=yes])
 AC_MSG_RESULT([$enable_raio_build])
 
+if test "$enable_raio_build" != "no"; then
+AC_CHECK_HEADERS([libaio.h],
+		 [mypj_found_aio_headers=yes; break;])
+AS_IF([test "x$mypj_found_aio_headers" != "xyes"],
+      [AC_MSG_ERROR([Unable to find the libaio-devel header files])])
+fi
+
 ##########################################################################
 # fio compilation support
 ##########################################################################
@@ -130,10 +137,12 @@ AC_MSG_RESULT([$enable_kernel_module])
 
 if test "$enable_kernel_module" != "no"; then
 	AC_CONFIG_SUBDIRS([src/kernel/hello])
+	AC_CONFIG_SUBDIRS([src/kernel/rdma])
+	AC_CONFIG_SUBDIRS([src/kernel/xio])
 fi
 
 if test "$enable_kernel_module" != "no"; then
-	subdirs2="";
+	subdirs2="src/kernel";
 else
 	subdirs2="src/usr";
 	subdirs2="$subdirs2 examples/usr/hello_world";
@@ -149,7 +158,35 @@ fi
 	subdirs2="$subdirs2 tests/usr/hello_test_bidi";
 	subdirs2="$subdirs2 tests/usr/hello_test_lat";
 	subdirs2="$subdirs2 tests/usr/hello_test_oneway";
+	subdirs2="$subdirs2 benchmarks/usr/xio_perftest";
 fi
+
+##########################################################################
+
+##########################################################################
+# add version.c uses strings to get GIT hash version
+##########################################################################
+if test -d "${GIT_DIR:-${ac_top_srcdir:-./}/.git}" ; then
+	GITHEAD=`git describe 2>/dev/null`
+	if test -z ${GITHEAD} ; then
+		GITHEAD=`git rev-parse HEAD`
+		echo "const char XIO_GIT_HEAD@<:@@:>@ = \"GIT_VERSION: $GITHEAD\";" \/\* for use with strings \*\/ >version.c
+		echo "const char XIO_GIT_HEAD_STRING@<:@@:>@ = \"$GITHEAD\";" >>version.c
+	fi
+	if test -n "`git diff-index -m --name-only HEAD`" ; then
+		GITHEAD=${GITHEAD}-dirty
+		echo "const char XIO_GIT_HEAD@<:@@:>@ = \"GIT_VERSION: $GITHEAD\";" \/\* for use with strings \*\/ >version.c
+		echo "const char XIO_GIT_HEAD_STRING@<:@@:>@ = \"$GITHEAD\";" >>version.c
+	fi
+else
+	GITHEAD=
+fi
+
+AC_MSG_CHECKING([for git head])
+AC_MSG_RESULT([$GITHEAD])
+AC_DEFINE_UNQUOTED([XIO_GITHEAD], ["$GITHEAD"], [Git commit used to build xio library])
+
+
 
 
 # distribute additional compiler and linker flags
@@ -175,6 +212,7 @@ AC_CONFIG_FILES([tests/usr/hello_test_mt/Makefile])
 AC_CONFIG_FILES([tests/usr/hello_test_bidi/Makefile])
 AC_CONFIG_FILES([tests/usr/hello_test_lat/Makefile])
 AC_CONFIG_FILES([tests/usr/hello_test_oneway/Makefile])
+AC_CONFIG_FILES([benchmarks/usr/xio_perftest/Makefile])
 
 # generate the final Makefile etc.
 AC_OUTPUT

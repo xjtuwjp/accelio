@@ -48,40 +48,58 @@ int page_size;
 void xio_rdma_transport_constructor(void);
 void xio_rdma_transport_destructor(void);
 
+static pthread_once_t ctor_key_once = PTHREAD_ONCE_INIT;
+static pthread_once_t dtor_key_once = PTHREAD_ONCE_INIT;
+static struct kref ini_kref;
+
+/*---------------------------------------------------------------------------*/
+/* xio_dtor								     */
+/*---------------------------------------------------------------------------*/
+static void xio_dtor()
+{
+	xio_rdma_transport_destructor();
+	xio_thread_data_destruct();
+	ctor_key_once = PTHREAD_ONCE_INIT;
+}
+
+/*---------------------------------------------------------------------------*/
+/* xio_dref								     */
+/*---------------------------------------------------------------------------*/
+static void xio_dref(struct kref *ref)
+{
+	pthread_once(&dtor_key_once, xio_dtor);
+}
+
+/*---------------------------------------------------------------------------*/
+/* xio_dtor								     */
+/*---------------------------------------------------------------------------*/
+static void xio_ctor()
+{
+	page_size = sysconf(_SC_PAGESIZE);
+	kref_init(&ini_kref);
+	xio_thread_data_construct();
+	sessions_store_construct();
+	conns_store_construct();
+	xio_rdma_transport_constructor();
+	dtor_key_once = PTHREAD_ONCE_INIT;
+}
+
 /*---------------------------------------------------------------------------*/
 /* xio_constructor like module init					     */
 /*---------------------------------------------------------------------------*/
 __attribute__((constructor)) void xio_init(void)
 {
-	static atomic_t initialized;
-	static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+	if (ctor_key_once != PTHREAD_ONCE_INIT)
+		kref_get(&ini_kref);
 
-	if (! atomic_read(&initialized)) {
-		pthread_mutex_lock(&mtx);
-		if (!atomic_read(&initialized)) {
-			page_size = sysconf(_SC_PAGESIZE);
-			xio_thread_data_construct();
-			sessions_store_construct();
-			conns_store_construct();
-			xio_rdma_transport_constructor();
-			atomic_set(&initialized, 1);
-		}
-		pthread_mutex_unlock(&mtx);
-	}
+	pthread_once(&ctor_key_once, xio_ctor);
 }
 
-__attribute__((destructor)) void xio_shutdown(void)
+__attribute__((destructor))   void xio_shutdown(void)
 {
-	static atomic_t initialized;
-	static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+	if (ctor_key_once == PTHREAD_ONCE_INIT)
+		return;
 
-	if (! atomic_read(&initialized)) {
-		pthread_mutex_lock(&mtx);
-		if (!atomic_read(&initialized)) {
-			xio_rdma_transport_destructor();
-			xio_thread_data_destruct();
-		}
-		pthread_mutex_unlock(&mtx);
-	}
+	kref_put(&ini_kref, xio_dref);
 }
 
